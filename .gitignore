@@ -9,6 +9,11 @@ __pycache__/
 build/
 dist/
 
+# Release verification artifacts
+native-dist/
+release-assets/
+ci-diagnostics/
+
 # Private maintainer context (both filename variants)
 /PROJECT.local.md
 /PROJECTS.local.md

@@ -101,6 +101,7 @@ The default published ports bind only to localhost; friends cannot connect remot
 ## Tests
 
 ```bash
+python3 -m pip install packaging
 PYTHONPATH=src python3 -m unittest discover -s tests -v
 ```
 

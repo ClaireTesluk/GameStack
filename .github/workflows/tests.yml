@@ -1,17 +1,300 @@
-name: Core tests
-on: [push, pull_request]
+name: CI and release
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
 permissions:
   contents: read
+
+concurrency:
+  group: ${{ github.event_name == 'workflow_dispatch' && 'gamestack-release' || format('ci-{0}-{1}', github.event_name, github.event.pull_request.number || github.ref) }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
+
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ['3.11', '3.12', '3.13']
+  metadata:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Require main for a release
+        if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main'
+        run: echo 'Manual releases must run on main.' >&2; exit 1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          python-version: ${{ matrix.python-version }}
-      - run: python -m pip install -e .
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r scripts/requirements-ci.txt
+      - run: python -m pip install --no-build-isolation -e .
+      - id: version
+        run: python scripts/ci.py version
+
+  test:
+    needs: metadata
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-2022, macos-14]
+        python: ['3.11', '3.12', '3.13', '3.14']
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install -e . packaging
       - run: python -m unittest discover -s tests -v
+
+  packages:
+    needs: metadata
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r scripts/requirements-ci.txt
+      - run: python -m pip install --no-build-isolation -e .
+      - run: python -m build --no-isolation
+      - run: python -m twine check --strict dist/*
+      - run: python scripts/ci.py package-smoke
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-packages
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+  native:
+    needs: metadata
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: linux-x86_64
+          - os: windows-2022
+            target: windows-x86_64
+          - os: macos-14
+            target: macos-arm64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r scripts/requirements-ci.txt
+      - run: python -m pip install --no-build-isolation -e .
+      - id: bundle
+        env:
+          BUILD_TARGET: ${{ matrix.target }}
+        shell: bash
+        run: python scripts/ci.py native --target "$BUILD_TARGET"
+      - name: Docker integration against Linux executable
+        if: runner.os == 'Linux'
+        env:
+          GAMESTACK_DOCKER_TEST: '1'
+          GAMESTACK_EXECUTABLE: ${{ steps.bundle.outputs.executable }}
+        run: python -m unittest discover -s tests/integration -v
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: failure() && runner.os == 'Linux'
+        with:
+          name: native-docker-diagnostics
+          path: ci-diagnostics/
+          retention-days: 7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-${{ matrix.target }}
+          path: native-dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+  docker:
+    needs: metadata
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -e .
+      - name: Test real Docker lifecycle
+        env:
+          GAMESTACK_DOCKER_TEST: '1'
+        run: python -m unittest discover -s tests/integration -v
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: failure()
+        with:
+          name: docker-diagnostics
+          path: ci-diagnostics/
+          retention-days: 7
+
+  ready:
+    name: Release checks
+    needs: [metadata, test, packages, native, docker]
+    if: always()
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - name: Require every job to pass
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        shell: python
+        run: |
+          import json, os
+          assert all(job['result'] == 'success' for job in json.loads(os.environ['RESULTS']).values()), 'Required checks failed or were skipped'
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+      - run: python -m pip install packaging
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: release-assets
+      - run: python scripts/ci.py checksums
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: verified-release
+          path: release-assets/*
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    needs: [metadata, ready]
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      # Deliberately no checkout, package installation, or project code execution here.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: verified-release
+          path: release-assets
+      - name: Tag and publish verified artifacts
+        id: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ needs.metadata.outputs.version }}
+          PRERELEASE: ${{ needs.metadata.outputs.prerelease }}
+          RELEASE_SHA: ${{ github.sha }}
+        shell: python
+        run: |
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+
+          def api(method, path, payload=None, binary=None):
+              url = path if path.startswith('https://') else f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/{path}"
+              headers = {'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28'}
+              data = json.dumps(payload).encode() if payload is not None else None
+              if binary is not None:
+                  data = binary
+                  headers['Content-Type'] = 'application/octet-stream'
+              request = urllib.request.Request(url, data=data, headers=headers, method=method)
+              try:
+                  with urllib.request.urlopen(request, timeout=120) as response:
+                      return json.load(response)
+              except urllib.error.HTTPError as error:
+                  if method == 'GET' and error.code == 404:
+                      return None
+                  raise RuntimeError(f'GitHub API request failed: HTTP {error.code}; inspect the draft/tag before retrying') from None
+
+          def verify_assets(directory, version):
+              if not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+(?:(?:a|b|rc)[0-9]+)?(?:\.post[0-9]+)?(?:\.dev[0-9]+)?', version):
+                  raise ValueError('Unsupported release version format')
+              expected = {f'gamestack-{version}-py3-none-any.whl', f'gamestack-{version}.tar.gz',
+                          f'gamestack-{version}-linux-x86_64.tar.gz', f'gamestack-{version}-windows-x86_64.zip',
+                          f'gamestack-{version}-macos-arm64.tar.gz'}
+              if {p.name for p in directory.iterdir()} != expected | {'SHA256SUMS'}:
+                  raise ValueError('Unexpected or missing release assets')
+              records = {}
+              for line in (directory / 'SHA256SUMS').read_text(encoding='utf-8').splitlines():
+                  digest, name = line.split('  ', 1)
+                  if name not in expected or name in records:
+                      raise ValueError('Unexpected or duplicate checksum entry')
+                  records[name] = digest
+              if set(records) != expected:
+                  raise ValueError('Missing checksums')
+              for name, digest in records.items():
+                  path = directory / name
+                  if path.is_symlink() or hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+                      raise ValueError('Release checksum mismatch')
+              return sorted(expected | {'SHA256SUMS'})
+
+          def publish(directory, version, sha, prerelease):
+              assets = verify_assets(directory, version)
+              if not re.fullmatch(r'[a-f0-9]{40}', sha):
+                  raise ValueError('Invalid commit SHA')
+              tag = 'v' + version
+              if api('GET', f'releases/tags/{tag}') is not None:
+                  raise RuntimeError('Release already exists, including drafts; explicit cleanup is required before retry')
+              page = 1
+              while True:
+                  releases = api('GET', f'releases?per_page=100&page={page}')
+                  if not isinstance(releases, list):
+                      raise RuntimeError('Cannot verify existing draft releases')
+                  if any(release['tag_name'] == tag for release in releases):
+                      raise RuntimeError('Release already exists, including drafts; explicit cleanup is required before retry')
+                  if len(releases) < 100:
+                      break
+                  page += 1
+              ref = api('GET', f'git/ref/tags/{tag}')
+              if ref is not None:
+                  obj = ref['object']
+                  if obj['type'] != 'tag':
+                      raise RuntimeError('Existing tag is not an annotated release tag')
+                  obj = api('GET', f"git/tags/{obj['sha']}")['object']
+                  if obj['type'] != 'commit' or obj['sha'] != sha:
+                      raise RuntimeError('Tag points to another commit; tags are never moved')
+              else:
+                  annotated = api('POST', 'git/tags', {'tag': tag, 'message': f'GameStack {tag}', 'object': sha, 'type': 'commit'})
+                  api('POST', 'git/refs', {'ref': 'refs/tags/' + tag, 'sha': annotated['sha']})
+              generated = api('POST', 'releases/generate-notes', {'tag_name': tag, 'target_commitish': sha})
+              body = generated['body'] + '\n\nTested: Python 3.11–3.14 on Ubuntu 22.04 x64, Windows 2022 x64, macOS 14 ARM64. Synthetic Docker acceptance: Ubuntu 22.04 only.\n\nInstall the wheel with pip, or extract the native archive and run gamestack/gamestack (gamestack.exe on Windows). Verify SHA256SUMS before installation. Native bundles are unsigned; Docker remains a separate host prerequisite. Windows/macOS artifacts provide local pack tooling, not supported hosting.\n\nExperimental engine: no supported GamePack or verified backup/restore/update workflows yet. See the bundled CLI and release guides.\n'
+              release = api('POST', 'releases', {'tag_name': tag, 'target_commitish': sha, 'name': tag, 'body': body,
+                                               'draft': True, 'prerelease': prerelease, 'make_latest': 'false'})
+              upload = release['upload_url'].split('{')[0]
+              for name in assets:
+                  result = api('POST', upload + '?name=' + urllib.parse.quote(name), binary=(directory / name).read_bytes())
+                  if result.get('state') != 'uploaded' or result.get('size') != (directory / name).stat().st_size:
+                      raise RuntimeError('Asset upload incomplete; draft retained for inspection')
+              api('PATCH', f"releases/{release['id']}", {'draft': False, 'make_latest': 'false' if prerelease else 'true'})
+
+          if __name__ == '__main__':
+              if os.environ['PRERELEASE'] not in ('true', 'false'):
+                  raise ValueError('Invalid prerelease flag')
+              publish(Path('release-assets'), os.environ['RELEASE_VERSION'], os.environ['RELEASE_SHA'], os.environ['PRERELEASE'] == 'true')

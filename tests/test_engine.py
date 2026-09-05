@@ -22,7 +22,7 @@ class EngineTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.root = Path(self.tmp.name) / "world storage ü"
+        self.root = Path(self.tmp.name).resolve() / "world storage ü"
         self.runtime = Runtime(self.root)
         self.pack = load_pack(EXAMPLE)
         self.values = {"SERVER_NAME": "Friends", "SERVER_PASSWORD": "synthetic-$VALUE-'password"}
@@ -156,7 +156,7 @@ class EngineTests(unittest.TestCase):
                 self.runtime.remove("friends")
             command.assert_not_called()
         (directory / "data").rmdir()
-        (directory / "data").symlink_to(Path(self.tmp.name), target_is_directory=True)
+        (directory / "data").symlink_to(Path(self.tmp.name).resolve(), target_is_directory=True)
         with patch.object(self.runtime, "command") as command:
             for instance in ("friends", "../escape"):
                 with self.assertRaises(GameStackError):
@@ -196,7 +196,7 @@ class EngineTests(unittest.TestCase):
                     validate(pack)
 
     def test_yaml_rejects_duplicate_keys_and_unsafe_tags_without_source_leak(self):
-        path = Path(self.tmp.name) / "invalid.yaml"
+        path = Path(self.tmp.name).resolve() / "invalid.yaml"
         for contents in ('id: a\nid: secret-value\n', '!!python/object:secret-value {}', 'id: [secret-value'):
             path.write_text(contents)
             with self.assertRaises(GameStackError) as caught:
@@ -231,10 +231,10 @@ class EngineTests(unittest.TestCase):
             self.runtime.directory("../elsewhere")
         directory = self.prepare()
         (directory / "data").rmdir()
-        (directory / "data").symlink_to(Path(self.tmp.name), target_is_directory=True)
+        (directory / "data").symlink_to(Path(self.tmp.name).resolve(), target_is_directory=True)
         with self.assertRaises(GameStackError):
             self.runtime.inspect("friends")
-        link = Path(self.tmp.name) / "link"
+        link = Path(self.tmp.name).resolve() / "link"
         link.symlink_to(self.root, target_is_directory=True)
         with self.assertRaises(GameStackError):
             Runtime(link)
@@ -296,7 +296,7 @@ class EngineTests(unittest.TestCase):
             self.assertEqual(self.runtime.lifecycle("status", "friends"), "unknown / health unavailable")
 
     def test_cli_prepare_and_duplicate_exit_status(self):
-        values = Path(self.tmp.name) / "values.yaml"
+        values = Path(self.tmp.name).resolve() / "values.yaml"
         values.write_text(yaml.safe_dump(self.values))
         args = ["--root", str(self.root), "install", str(EXAMPLE), "--name", "friends", "--values", str(values), "--prepare-only"]
         output = io.StringIO()

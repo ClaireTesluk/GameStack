@@ -32,6 +32,7 @@ The CLI can validate GamePack YAML, prompt for settings, prepare private instanc
 - [Write a GamePack](docs/gamepacks.md)
 - [v0.1 implementation plan and release gates](docs/v0.1-plan.md)
 - [Third-party components](THIRD_PARTY.md)
+- [CI, standalone builds, and GitHub releases](docs/releases.md)
 
 The initial release will focus on proving the core experience with a small number of supported games rather than trying to support everything at once.
 
