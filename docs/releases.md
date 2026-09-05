@@ -21,7 +21,7 @@ Checks include:
 
 - Python 3.11–3.14 on Ubuntu 22.04 x86-64, Windows 2022 x86-64, and macOS 14 ARM64.
 - Wheel and source builds, strict metadata checks, and fresh-environment installs of each.
-- Native PyInstaller builds with Python 3.11 on all three OS targets, and CLI smoke tests of the bundles both before and after archiving/extraction.
+- Native PyInstaller builds with Python 3.11 on all three OS targets, and CLI smoke tests of the bundles both before and after archiving/extraction. Artifact smoke tests use an empty subprocess search path to exclude host Docker tooling; they verify preparation, listing with unavailable status, and refusal to remove without confirmation. Real Docker behavior is covered separately by Linux integration tests.
 - Real Docker lifecycle, health, persistence through container recreation, and removal with retained synthetic data on Ubuntu. This runs against both the installed Python CLI and Linux executable.
 - Publisher regression tests: version mismatch, checksum failures, conflicting tags, existing releases/drafts, failed release gates, and incomplete uploads.
 

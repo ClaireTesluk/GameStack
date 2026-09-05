@@ -46,6 +46,11 @@ def smoke(command, expected):
         storage = workspace / "world storage ü"
         env = dict(os.environ)
         env.pop("PYTHONPATH", None)
+        # Artifact checks must not launch host Docker/Compose processes, which can
+        # outlive the CLI and keep its temporary working directory locked on Windows.
+        empty_path = workspace / "empty-path"
+        empty_path.mkdir()
+        env["PATH"] = str(empty_path)
         def invoke(arguments, success=True):
             result = subprocess.run([*command, *arguments], cwd=workspace, env=env,
                                     text=True, capture_output=True, timeout=60)
@@ -61,7 +66,7 @@ def smoke(command, expected):
         values.write_text('SERVER_NAME: CI\nSERVER_PASSWORD: "synthetic-ci-password"\n', encoding="utf-8")
         common = ["--root", str(storage)]
         invoke([*common, "install", str(pack), "--prepare-only", "--name", "smoke", "--values", str(values)])
-        assert "smoke:" in invoke([*common, "list"])
+        assert "smoke: unknown (status unavailable)" in invoke([*common, "list"])
         invoke([*common, "rm", "smoke"], success=False)
         assert (storage / "smoke/instance.yaml").exists()
         assert not (storage / "smoke/removed.yaml").exists()

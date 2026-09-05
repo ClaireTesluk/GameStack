@@ -400,7 +400,7 @@ Then repeat.
 
 GameStack is being designed around a mix of open tooling and polished GamePacks.
 
-The exact licensing and commercial model are still being finalized.
+GameStack is licensed under the GNU Affero General Public License v3.0 (see [License](#license)). The commercial GamePack model is still being finalized.
 
 The general direction is to keep enough of the project open to make the system:
 
@@ -430,14 +430,7 @@ If you're interested in:
 
 issues and discussions will eventually be the best place to contribute ideas.
 
-Before contributing code, read:
-
-- [`PROJECT.md`](./PROJECT.md)
-- [`AGENTS.md`](./AGENTS.md)
-
-`PROJECT.md` describes the product direction and architecture.
-
-`AGENTS.md` describes implementation rules and engineering expectations.
+Before contributing code, read the [v0.1 implementation plan and release gates](docs/v0.1-plan.md) and the [GamePack documentation](docs/gamepacks.md).
 
 ---
 
@@ -479,7 +472,7 @@ If GameStack can consistently accomplish that, everything else can be built on t
 
 ## License
 
-Licensing is still being finalized prior to the first public release.
+GameStack is licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)**. See [LICENSE](LICENSE) for the full license text.
 
 Third-party game-server software and Docker images remain subject to their respective licenses and terms.
 

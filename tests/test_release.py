@@ -1,6 +1,9 @@
 """Test the exact publishing program embedded in the privileged workflow."""
 import importlib.util
+import os
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -15,6 +18,44 @@ exec(compile(PUBLISH_STEP['run'], '<workflow-publisher>', 'exec'), PUBLISHER)
 spec = importlib.util.spec_from_file_location('ci', ROOT / 'scripts/ci.py')
 ci = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ci)
+
+
+class ArtifactSmokeTests(unittest.TestCase):
+    def test_installed_cli_smoke_is_isolated_and_cleans_up(self):
+        from gamestack import __version__
+
+        parent_env = dict(os.environ)
+        workspaces = set()
+        run = subprocess.run
+        results = []
+
+        def invoke(args, **kwargs):
+            workspace = Path(kwargs['cwd'])
+            workspaces.add(workspace)
+            search_path = Path(kwargs['env']['PATH'])
+            self.assertEqual(search_path.parent, workspace)
+            self.assertTrue(search_path.is_dir())
+            self.assertEqual(list(search_path.iterdir()), [])
+            expected_env = dict(parent_env)
+            expected_env.pop('PYTHONPATH', None)
+            expected_env['PATH'] = str(search_path)
+            self.assertEqual(kwargs['env'], expected_env)
+            self.assertTrue(Path(args[0]).is_absolute())
+            result = run(args, **kwargs)
+            results.append((args, result))
+            return result
+
+        with patch.object(ci.subprocess, 'run', side_effect=invoke):
+            ci.smoke([sys.executable, '-m', 'gamestack'], __version__)
+
+        self.assertEqual(dict(os.environ), parent_env)
+        self.assertEqual(len(workspaces), 1)
+        self.assertTrue(all(not path.exists() for path in workspaces))
+        listing = next(result for args, result in results if args[-1] == 'list')
+        self.assertIn('smoke: unknown (status unavailable)', listing.stdout)
+        removal = next(result for args, result in results if args[-2:] == ['rm', 'smoke'])
+        self.assertNotEqual(removal.returncode, 0)
+        self.assertIn('Removal needs confirmation', removal.stderr)
 
 
 class ReleaseTests(unittest.TestCase):
