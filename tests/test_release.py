@@ -21,6 +21,53 @@ spec.loader.exec_module(ci)
 
 
 class ArtifactSmokeTests(unittest.TestCase):
+    def test_workspace_retries_transient_windows_cleanup_failure(self):
+        cleanup = tempfile.TemporaryDirectory.cleanup
+        attempts = []
+
+        def locked_once(temporary):
+            attempts.append(temporary.name)
+            if len(attempts) == 1:
+                raise PermissionError('synthetic sharing violation')
+            cleanup(temporary)
+
+        with patch.object(ci.platform, 'system', return_value='Windows'), \
+                patch.object(ci.time, 'sleep') as sleep, \
+                patch.object(ci.tempfile.TemporaryDirectory, 'cleanup', locked_once):
+            with ci.smoke_workspace() as workspace:
+                path = Path(workspace)
+                (path / 'synthetic.txt').write_text('test', encoding='utf-8')
+            self.assertFalse(path.exists())
+        self.assertEqual(len(attempts), 2)
+        sleep.assert_called_once_with(0.5)
+
+    def test_workspace_cleanup_errors_are_not_suppressed(self):
+        for system, error, count in (
+                ('Windows', PermissionError, 4),
+                ('Linux', PermissionError, 1),
+                ('Windows', OSError, 1)):
+            with self.subTest(system=system, error=error):
+                temporary = tempfile.TemporaryDirectory()
+                self.addCleanup(temporary.cleanup)
+                with patch.object(ci.tempfile, 'TemporaryDirectory', return_value=temporary), \
+                        patch.object(temporary, 'cleanup', side_effect=error('synthetic failure')) as cleanup, \
+                        patch.object(ci.platform, 'system', return_value=system), \
+                        patch.object(ci.time, 'sleep') as sleep:
+                    with self.assertRaises(error):
+                        with ci.smoke_workspace():
+                            pass
+                self.assertEqual(cleanup.call_count, count)
+                self.assertEqual(sleep.call_count, count - 1)
+
+    def test_workspace_cleans_up_after_smoke_failure(self):
+        with patch.object(ci.time, 'sleep') as sleep:
+            with self.assertRaisesRegex(AssertionError, 'synthetic smoke failure'):
+                with ci.smoke_workspace() as workspace:
+                    path = Path(workspace)
+                    raise AssertionError('synthetic smoke failure')
+        self.assertFalse(path.exists())
+        sleep.assert_not_called()
+
     def test_installed_cli_smoke_is_isolated_and_cleans_up(self):
         from gamestack import __version__
 
