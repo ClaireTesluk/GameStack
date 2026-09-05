@@ -6,6 +6,7 @@ import logging
 import os
 from pathlib import Path
 import platform
+import shutil
 import subprocess
 import time
 
@@ -156,7 +157,14 @@ class Runtime:
     def command(self, args: list[str], timeout: int = 30) -> str:
         started = time.monotonic()
         try:
-            result = subprocess.run(args, check=True, capture_output=True, text=True, encoding="utf-8", timeout=timeout)
+            # Windows also searches system directories for bare executable
+            # names. Honor PATH consistently, including an intentionally empty
+            # tool search path during installed-artifact checks.
+            executable = shutil.which(args[0])
+            if executable is None:
+                raise FileNotFoundError("Server tooling is not on PATH")
+            command = [str(Path(executable).resolve()), *args[1:]]
+            result = subprocess.run(command, check=True, capture_output=True, text=True, encoding="utf-8", timeout=timeout)
         except (OSError, subprocess.SubprocessError, UnicodeError) as exc:
             # Docker output and exception strings can expose credentials; never log either.
             log.debug("Server tooling failed type=%s elapsed=%.2fs", type(exc).__name__, time.monotonic() - started)

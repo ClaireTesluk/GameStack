@@ -30,6 +30,27 @@ class EngineTests(unittest.TestCase):
     def prepare(self):
         return self.runtime.prepare(self.pack, "friends", self.values)
 
+    def test_command_does_not_search_outside_path(self):
+        # Windows CreateProcess also searches system directories when PATH is
+        # empty. Resolve tooling ourselves so it cannot launch such a Docker.
+        empty_path = self.root.parent / 'empty-path'
+        empty_path.mkdir()
+        with patch.dict(os.environ, {'PATH': str(empty_path)}), \
+                patch('gamestack.runtime.subprocess.run') as process:
+            with self.assertRaises(GameStackError):
+                self.runtime.command(['docker', 'info'])
+        process.assert_not_called()
+
+    def test_command_uses_resolved_executable_with_spaces(self):
+        executable = str(self.root.parent / 'tools with spaces' / 'docker.exe')
+        arguments = ['docker', 'info']
+        with patch('gamestack.runtime.shutil.which', return_value=executable), \
+                patch('gamestack.runtime.subprocess.run', return_value=subprocess.CompletedProcess([], 0, 'version')) as process:
+            self.assertEqual(self.runtime.command(arguments, timeout=7), 'version')
+        self.assertEqual(process.call_args.args[0], [executable, 'info'])
+        self.assertEqual(process.call_args.kwargs['timeout'], 7)
+        self.assertEqual(arguments, ['docker', 'info'])
+
     def test_list_missing_and_empty_root_does_not_create_files(self):
         self.assertEqual(self.runtime.list_instances(), [])
         self.assertFalse(self.root.exists())
@@ -82,7 +103,8 @@ class EngineTests(unittest.TestCase):
     def test_list_keeps_instances_when_docker_fails(self):
         self.prepare()
         output = io.StringIO()
-        with patch("gamestack.runtime.subprocess.run", side_effect=FileNotFoundError("secret-value")), contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+        with patch("gamestack.runtime.shutil.which", return_value=str(self.root / 'docker')), \
+                patch("gamestack.runtime.subprocess.run", side_effect=FileNotFoundError("secret-value")), contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
             self.assertEqual(main(["--root", str(self.root), "list"]), 0)
         self.assertIn("friends: unknown (status unavailable)", output.getvalue())
         self.assertIn("gamestack doctor", output.getvalue())
@@ -285,10 +307,12 @@ class EngineTests(unittest.TestCase):
     def test_subprocess_failures_do_not_expose_secrets(self):
         for error in (subprocess.CalledProcessError(1, ["secret-value"], stderr="secret-value"),
                       subprocess.TimeoutExpired(["secret-value"], 1), FileNotFoundError("secret-value")):
-            with patch("gamestack.runtime.subprocess.run", side_effect=error):
+            with patch("gamestack.runtime.shutil.which", return_value=str(self.root / 'docker')), \
+                    patch("gamestack.runtime.subprocess.run", side_effect=error) as process:
                 with self.assertRaises(GameStackError) as caught:
                     self.runtime.command(["docker", "info"])
                 self.assertNotIn("secret-value", str(caught.exception))
+                process.assert_called_once()
 
     def test_status_sanitizes_untrusted_output(self):
         self.prepare()
@@ -309,7 +333,8 @@ class EngineTests(unittest.TestCase):
     def test_failed_health_is_not_reported_successful_in_debug(self):
         self.prepare()
         output = io.StringIO()
-        with patch.object(Runtime, "doctor"), patch("gamestack.runtime.subprocess.run", side_effect=subprocess.CalledProcessError(1, ["secret-value"], stderr="secret-value")), contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+        with patch("gamestack.runtime.shutil.which", return_value=str(self.root / 'docker')), \
+                patch.object(Runtime, "doctor"), patch("gamestack.runtime.subprocess.run", side_effect=subprocess.CalledProcessError(1, ["secret-value"], stderr="secret-value")), contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
             self.assertEqual(main(["--debug", "--root", str(self.root), "start", "friends"]), 1)
         self.assertNotIn("secret-value", output.getvalue())
         self.assertNotIn("friends: healthy", output.getvalue())
