@@ -6,7 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 import yaml
 
@@ -25,33 +25,34 @@ class ArtifactSmokeTests(unittest.TestCase):
         cleanup = tempfile.TemporaryDirectory.cleanup
         attempts = []
 
-        def locked_once(temporary):
+        def locked_until_final_attempt(temporary):
             attempts.append(temporary.name)
-            if len(attempts) == 1:
+            if len(attempts) < 5:
                 raise PermissionError('synthetic sharing violation')
             cleanup(temporary)
 
-        with patch.object(ci.platform, 'system', return_value='Windows'), \
+        with patch.object(ci.sys, 'platform', 'win32'), \
+                patch.object(ci.platform, 'system', side_effect=AssertionError('cleanup must not probe the host')), \
                 patch.object(ci.time, 'sleep') as sleep, \
-                patch.object(ci.tempfile.TemporaryDirectory, 'cleanup', locked_once):
+                patch.object(ci.tempfile.TemporaryDirectory, 'cleanup', locked_until_final_attempt):
             with ci.smoke_workspace() as workspace:
                 path = Path(workspace)
                 (path / 'synthetic.txt').write_text('test', encoding='utf-8')
             self.assertFalse(path.exists())
-        self.assertEqual(len(attempts), 2)
-        sleep.assert_called_once_with(0.5)
+        self.assertEqual(len(attempts), 5)
+        self.assertEqual(sleep.call_args_list, [call(0.5), call(1), call(2), call(4)])
 
     def test_workspace_cleanup_errors_are_not_suppressed(self):
         for system, error, count in (
-                ('Windows', PermissionError, 4),
-                ('Linux', PermissionError, 1),
-                ('Windows', OSError, 1)):
+                ('win32', PermissionError, 5),
+                ('linux', PermissionError, 1),
+                ('win32', OSError, 1)):
             with self.subTest(system=system, error=error):
                 temporary = tempfile.TemporaryDirectory()
                 self.addCleanup(temporary.cleanup)
                 with patch.object(ci.tempfile, 'TemporaryDirectory', return_value=temporary), \
                         patch.object(temporary, 'cleanup', side_effect=error('synthetic failure')) as cleanup, \
-                        patch.object(ci.platform, 'system', return_value=system), \
+                        patch.object(ci.sys, 'platform', system), \
                         patch.object(ci.time, 'sleep') as sleep:
                     with self.assertRaises(error):
                         with ci.smoke_workspace():

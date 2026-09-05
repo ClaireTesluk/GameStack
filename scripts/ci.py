@@ -48,14 +48,17 @@ def smoke_workspace():
     try:
         yield temporary.name
     finally:
-        for attempt in range(4):
+        delays = (0.5, 1, 2, 4)
+        for attempt in range(len(delays) + 1):
             try:
                 temporary.cleanup()
                 break
             except PermissionError:
-                if platform.system() != "Windows" or attempt == 3:
+                # platform.system() can itself spawn a subprocess on Python
+                # 3.11 Windows; cleanup must not probe or launch host tooling.
+                if sys.platform != "win32" or attempt == len(delays):
                     raise
-                time.sleep(0.5)
+                time.sleep(delays[attempt])
 
 
 def smoke(command, expected):

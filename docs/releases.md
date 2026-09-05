@@ -1,6 +1,6 @@
 # CI and GitHub releases
 
-The `CI and release` workflow tests pull requests and pushes to `main`. A manual run on `main` additionally tags and publishes the tested commit. Ordinary pushes never publish. This is release infrastructure for the experimental engine; the first version remains `0.1.0.dev1`, and real GamePack plus backup/restore/update acceptance is still pending.
+The `CI and release` workflow tests pull requests and pushes to `main` or `fix/ci-*` branches. CI fix branches can therefore run the full test and build matrix before a PR is opened. A manual run on `main` additionally tags and publishes the tested commit. Ordinary pushes never publish. This is release infrastructure for the experimental engine; the first version remains `0.1.0.dev1`, and real GamePack plus backup/restore/update acceptance is still pending.
 
 ## Release a version
 
@@ -62,6 +62,8 @@ Native bundles have no Windows certificate signature or Apple Developer ID/notar
 Linux executable compatibility is tested on Ubuntu 22.04 x86-64, not all Linux systems. Windows/macOS builds support local pack tooling; they do not establish Docker Desktop, native hosting, Intel Mac, or ARM Linux support. Synthetic nginx acceptance does not make nginx a supported GamePack and does not establish save consistency for real games.
 
 ## Failures and retries
+
+Artifact smoke workspaces retry Windows permission failures after 0.5, 1, 2, and 4 seconds (7.5 seconds total). Persistent failures still fail the job. Cleanup identifies Windows without starting a platform probe. GameStack resolves Docker through PATH before execution, preventing Windows system-directory lookup from bypassing the smoke test’s empty PATH and launching host Docker processes. Normal use requires Docker on PATH.
 
 - Before checks pass, no tag or release is created. Fix the failure and start a fresh manual run.
 - If tag creation succeeds but no release exists, a fresh run may reuse only an annotated tag pointing to the same tested commit. Lightweight or conflicting tags fail; existing tags are never moved.
