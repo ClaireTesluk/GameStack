@@ -1,0 +1,23 @@
+# Schema example only: replace the placeholder image digest before hosting.
+schema_version: 1
+id: example
+version: "0.1.0"
+name: Example server
+image: example.invalid/game/server@sha256:0000000000000000000000000000000000000000000000000000000000000000
+data_path: /data
+stop_timeout: 120
+ports:
+  - host: 2456
+    container: 2456
+    protocol: udp
+    purpose: Game connections (local host only in this milestone)
+environment:
+  SERVER_NAME:
+    prompt: Server name
+    secret: false
+    default: My friends server
+  SERVER_PASSWORD:
+    prompt: Server password
+    secret: true
+healthcheck:
+  - /usr/local/bin/check-server

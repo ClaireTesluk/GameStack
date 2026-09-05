@@ -24,7 +24,14 @@ You should not need to understand Docker Compose, SteamCMD, bind mounts, or Linu
 
 ## Status
 
-GameStack is currently in **early development / V0.1 planning**.
+GameStack is currently in **early development: the first v0.1 engine milestone is implemented**. It is not a finished release and no GamePack is supported yet.
+
+The CLI can validate GamePack YAML, prompt for settings, prepare private instance storage, and list configured instances with state and health, and run start/stop/restart/status/doctor commands, plus `rm` to remove an instance while retaining its data. Backup, restore, updates, and real-game acceptance remain pending.
+
+- [Try the development CLI](docs/cli.md)
+- [Write a GamePack](docs/gamepacks.md)
+- [v0.1 implementation plan and release gates](docs/v0.1-plan.md)
+- [Third-party components](THIRD_PARTY.md)
 
 The initial release will focus on proving the core experience with a small number of supported games rather than trying to support everything at once.
 
@@ -99,7 +106,7 @@ GameStack uses **GamePacks** to provide game-specific deployment logic.
 
 A GamePack describes everything GameStack needs to run and maintain a particular server.
 
-For example, a Valheim GamePack might define:
+This roadmap example illustrates the intent; it is not the implemented schema. See [schema 1](docs/gamepacks.md) for the accepted format. A future Valheim GamePack might define:
 
 ```yaml
 name: valheim

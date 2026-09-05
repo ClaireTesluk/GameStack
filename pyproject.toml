@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gamestack"
+version = "0.1.0.dev1"
+description = "A small CLI runtime for declarative game server packs"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = ["PyYAML>=6.0.2,<7"]
+
+[project.scripts]
+gamestack = "gamestack.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
