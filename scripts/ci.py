@@ -1,5 +1,6 @@
 """Portable build and artifact checks. Run from the repository root."""
 import argparse
+from contextlib import contextmanager
 import hashlib
 import importlib.metadata
 import os
@@ -11,6 +12,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import tomllib
 import zipfile
 
@@ -39,9 +41,26 @@ def version():
     return value
 
 
+@contextmanager
+def smoke_workspace():
+    """Remove synthetic files, allowing briefly held Windows handles to close."""
+    temporary = tempfile.TemporaryDirectory()
+    try:
+        yield temporary.name
+    finally:
+        for attempt in range(4):
+            try:
+                temporary.cleanup()
+                break
+            except PermissionError:
+                if platform.system() != "Windows" or attempt == 3:
+                    raise
+                time.sleep(0.5)
+
+
 def smoke(command, expected):
     """Exercise the installed artifact from outside the checkout, with synthetic input."""
-    with tempfile.TemporaryDirectory() as temporary:
+    with smoke_workspace() as temporary:
         workspace = Path(temporary).resolve()
         storage = workspace / "world storage ü"
         env = dict(os.environ)
