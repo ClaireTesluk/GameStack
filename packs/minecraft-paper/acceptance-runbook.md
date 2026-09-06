@@ -1,0 +1,292 @@
+# Paper playable acceptance runbook
+
+Run these steps on your disposable Ubuntu Server 24.04 x86-64 host as a non-root
+user with Docker/Compose access and 8 GiB RAM. You operate the host and clients;
+return sanitized results for the [acceptance record](acceptance.md). Do not run
+failure tests against your working server. These are evaluator commands, not new
+normal-operation requirements. No release workflow is needed.
+
+## 1. Record the existing successful session
+
+Supply the actual test date, host OS/architecture, clean-install status, operating
+account privilege, walkthrough followed, client version, whether the client was
+on a second machine, allowlist status, and revision/pins if known. Unknown fields
+stay unknown. Your successful setup and legitimate-account join already count as
+user-reported evidence; repeat only conditions that were not established.
+
+For subsequent runs, record the exact candidate before copying it to the host:
+
+```bash
+git rev-parse HEAD
+git status --short
+sha256sum packs/minecraft-paper/pack.yaml packs/minecraft-paper/upstream-lock.json
+```
+
+A commit hash alone does not identify uncommitted changes. Retain the exact source
+snapshot used, including untracked pack/test files; do not include private values
+or worlds. Record its archive checksum when transferring it. Do not change pins
+between acceptance steps.
+
+Follow [CLI setup](../../docs/cli.md#setup), then the [pack walkthrough](README.md).
+Record `cat /etc/os-release`, `uname -m`, `id -u`, `python --version`,
+`docker version`, `docker compose version`, `free -h`, and `df -h .` privately.
+Do not accept the EULA unless you personally agree.
+
+## 2. Run automated host checks
+
+TCP 25565 must be free. Schedule this separately from the working server; do not
+stop an unrelated server merely to run the harness.
+
+```bash
+GAMESTACK_PAPER_TEST=1 GAMESTACK_MINECRAFT_EULA=TRUE GAMESTACK_PAPER_OWNER=YourJavaName python -m unittest discover -s tests/integration -p test_paper_docker.py -v
+```
+
+The printed private `evidence.json` records observed host/container versions, pins,
+startup/shutdown timings, bindings, save markers, and result. Retain the entire
+printed test directory, including failed runs. An incomplete report or skipped
+test is not a pass. Inspect local logs if save-marker recognition fails; do not
+weaken the assertion without establishing the pinned server's actual save output.
+The harness verifies configured admin-service disable flags; listener inspection
+and actual joins remain manual checks. It does not record arbitrary container
+environments, logs, or player chat.
+
+## 3. Prepare a disposable manual instance
+
+Use a separate test host/VM if the working server occupies TCP 25565. These shell
+variables must remain in this terminal; they identify only the new test instance.
+
+```bash
+PAPER_ACCEPT_ROOT=$(mktemp -d "$HOME/gamestack-paper-acceptance.XXXXXXXX")
+PAPER_ACCEPT_NAME=paper-manual
+export PAPER_ACCEPT_ROOT PAPER_ACCEPT_NAME
+gamestack --root "$PAPER_ACCEPT_ROOT" install packs/minecraft-paper/pack.yaml --name "$PAPER_ACCEPT_NAME" --bind-address 0.0.0.0
+```
+
+Accept the EULA yourself and enter test player names. Define a helper using the
+runtime's existing project-name calculation so evaluator Docker commands address
+exactly this instance:
+
+```bash
+paper_compose() {
+  python - "$@" <<'PY'
+import os, subprocess, sys
+from pathlib import Path
+from gamestack.runtime import Runtime
+root = Path(os.environ['PAPER_ACCEPT_ROOT']).resolve(strict=True)
+assert root.parent == Path.home().resolve() and root.name.startswith('gamestack-paper-acceptance.')
+runtime = Runtime(root)
+directory, _ = runtime.inspect(os.environ['PAPER_ACCEPT_NAME'])
+raise SystemExit(subprocess.run(runtime.compose_command(directory) + sys.argv[1:]).returncode)
+PY
+}
+paper_compose ps --all
+```
+
+Keep a per-step record: UTC time, candidate, command/action, expected result,
+observed result, exit status, evidence file/screenshot, and recovery result. Keep
+raw logs private; redact player names, addresses, chat, and secrets before sharing.
+
+## 4. Players, persistence, and shutdown
+
+1. Join from the second machine with the allowlisted owner using Java 26.2.
+2. Have the legitimate unlisted friend attempt to join: expect rejection. Run
+   `/whitelist add FriendName`, verify admission, then `/whitelist remove FriendName`
+   and verify rejection on a new connection. Record `/whitelist list` privately.
+3. Place distinctive blocks in Overworld, Nether, and End. Record dimensions,
+   coordinates, screenshots, inventory quantities, and logout positions. Use two
+   players logging out in different dimensions; repeat for the remaining dimension.
+4. Stop/start, then test `restart`, then recreate the stopped container as below.
+   After each transition check all recorded world/player state and repeat friend
+   add/remove tests. Verify the owner still has operator privileges. Compare saved
+   allowlist state *before* issuing new commands so resets cannot be hidden.
+
+```bash
+PAPER_ACCEPT_CID=$(paper_compose ps --quiet server)
+time gamestack --root "$PAPER_ACCEPT_ROOT" stop "$PAPER_ACCEPT_NAME"
+docker inspect --format '{{.State.ExitCode}} {{.State.OOMKilled}} {{.State.FinishedAt}}' "$PAPER_ACCEPT_CID"
+docker logs --tail 150 "$PAPER_ACCEPT_CID"
+gamestack --root "$PAPER_ACCEPT_ROOT" start "$PAPER_ACCEPT_NAME"
+gamestack --root "$PAPER_ACCEPT_ROOT" restart "$PAPER_ACCEPT_NAME"
+```
+
+Require save-complete messages, exit 0, no OOM, and no forced kill. Record the
+shutdown within restart from logs as well. A successful CLI stop alone is not
+proof of a consistent save. To recreate, stop and check shutdown again, then:
+
+```bash
+paper_compose rm --force server
+gamestack --root "$PAPER_ACCEPT_ROOT" start "$PAPER_ACCEPT_NAME"
+paper_compose ps --quiet server
+```
+
+The container ID must change while world/player and access-control state survive.
+Do not use volume deletion, delete data, or edit generated Compose/metadata.
+
+## 5. Network and external join
+
+```bash
+PAPER_ACCEPT_CID=$(paper_compose ps --quiet server)
+docker inspect --format '{{json .NetworkSettings.Ports}}' "$PAPER_ACCEPT_CID"
+PAPER_ACCEPT_PID=$(docker inspect --format '{{.State.Pid}}' "$PAPER_ACCEPT_CID")
+sudo nsenter -t "$PAPER_ACCEPT_PID" -n ss -lntup
+```
+
+Expect only TCP 25565 published and the game listener; investigate any additional
+listener. Confirm disabled RCON/query/JMX properties in `data/server.properties`
+and the fixed `ENABLE_SSH=FALSE` setting in the pack. From the second machine,
+verify game connectivity and that administrative endpoints are unavailable; record
+any unrelated host services separately. Configuration flags alone do not prove
+network exposure. Never share a full `docker inspect` environment dump.
+
+You manually forward only TCP 25565 if needed and have an external friend join
+from a genuinely separate internet connection. Record success, or the specific
+CGNAT/double-NAT/ISP limitation. Existing external-join evidence can satisfy this
+step. Do not claim universal reachability or change broad firewall policies.
+
+## 6. Isolated crash and failure scenarios
+
+Use a fresh disposable instance/VM for these steps, repeating section 3 in a fresh
+terminal. Preserve the persistence-test world. Capture command exit status with
+`echo $?` immediately after each failing GameStack command. Require failure rather
+than a healthy/success claim, retained files, useful next steps, and recovery after
+removing the fault. A preparation message followed by a startup failure is not a
+false startup-success claim. Record hashes of a stopped-state sentinel file and
+configuration before/after faults; do not expect live world/log hashes to be static.
+
+### Crash
+
+On the disposable world only:
+
+```bash
+PAPER_ACCEPT_CID=$(paper_compose ps --quiet server)
+docker inspect --format '{{.RestartCount}} {{.HostConfig.RestartPolicy.Name}}' "$PAPER_ACCEPT_CID"
+docker top "$PAPER_ACCEPT_CID" -eo pid,comm
+```
+
+Identify the **host PID of java** in that exact container. Run `sudo kill -KILL
+JAVA_HOST_PID`, replacing the placeholder with that verified numeric PID. This
+simulates a process crash without an administrative Docker stop/kill suppressing
+restart policy. Recheck restart count, `gamestack status`, health, and actual rejoin.
+Keep the crash evidence separate from normal shutdown results.
+
+### Occupied port
+
+Before installing a fresh instance, run `python -m http.server 25565 --bind
+127.0.0.1` in a second terminal. Attempt the section 3 install; expect startup
+failure and retained instance files. Stop the HTTP fixture with Ctrl-C, then use
+`gamestack --root "$PAPER_ACCEPT_ROOT" start "$PAPER_ACCEPT_NAME"` to recover.
+Do not reinstall over the retained instance.
+
+### Blocked initial server downloads
+
+Prepare a fresh instance with `--prepare-only` added to section 3's install command.
+Then create its container without starting it:
+
+```bash
+paper_compose pull server
+paper_compose create server
+PAPER_ACCEPT_CID=$(paper_compose ps --all --quiet server)
+docker inspect --format '{{json .NetworkSettings.Networks}}' "$PAPER_ACCEPT_CID"
+```
+
+Record the unique Compose network name and disconnect **only this container**:
+`docker network disconnect NETWORK_NAME "$PAPER_ACCEPT_CID"`. Run GameStack start;
+expect download/startup failure within the existing bounded timeout. Recover with
+`docker network connect NETWORK_NAME "$PAPER_ACCEPT_CID"`, then GameStack start.
+Do not alter host firewall rules or disconnect the working server. If the engine
+will not start a disconnected container, record that as fixture failure, not proof
+of blocked-download handling; use an offline disposable VM with the image cached
+and no downloaded Paper artifacts instead.
+
+### Unwritable data
+
+Prepare a fresh instance without starting it, then:
+
+```bash
+PAPER_ACCEPT_MODE=$(stat -c %a "$PAPER_ACCEPT_ROOT/$PAPER_ACCEPT_NAME/data")
+chmod u-w "$PAPER_ACCEPT_ROOT/$PAPER_ACCEPT_NAME/data"
+gamestack --root "$PAPER_ACCEPT_ROOT" start "$PAPER_ACCEPT_NAME"
+# Record failure, then restore even if the preceding command failed:
+chmod "$PAPER_ACCEPT_MODE" "$PAPER_ACCEPT_ROOT/$PAPER_ACCEPT_NAME/data"
+gamestack --root "$PAPER_ACCEPT_ROOT" start "$PAPER_ACCEPT_NAME"
+```
+
+### Insufficient disk
+
+Use another disposable VM. Prepare its fresh instance without starting it. Mount a
+bounded 64 MiB temporary filesystem over its **empty test data directory**. First
+run this guard; stop if it fails. It rejects symlinks, unexpected roots, and data
+that would be hidden by the mount:
+
+```bash
+python - <<'PYGUARD'
+import os
+from pathlib import Path
+root = Path(os.environ['PAPER_ACCEPT_ROOT'])
+data = root / os.environ['PAPER_ACCEPT_NAME'] / 'data'
+assert root.resolve(strict=True).parent == Path.home().resolve()
+assert root.name.startswith('gamestack-paper-acceptance.')
+assert root == root.resolve(strict=True) and data == data.resolve(strict=True)
+assert data.is_dir() and not any(data.iterdir())
+print('Validated empty disposable data directory:', data)
+PYGUARD
+```
+
+Then mount:
+
+```bash
+sudo mount -t tmpfs -o "size=64m,uid=$(id -u),gid=$(id -g),mode=700" tmpfs "$PAPER_ACCEPT_ROOT/$PAPER_ACCEPT_NAME/data"
+gamestack --root "$PAPER_ACCEPT_ROOT" start "$PAPER_ACCEPT_NAME"
+```
+
+Confirm actual ENOSPC evidence in private logs; an unrelated download failure is
+not a disk-test pass. Stop the test container. Before unmounting, preserve all
+partial files in a new private directory on the VM's main disk:
+
+```bash
+gamestack --root "$PAPER_ACCEPT_ROOT" stop "$PAPER_ACCEPT_NAME"
+PAPER_DISK_COPY=$(mktemp -d "$HOME/gamestack-paper-disk-evidence.XXXXXXXX")
+cp -a "$PAPER_ACCEPT_ROOT/$PAPER_ACCEPT_NAME/data/." "$PAPER_DISK_COPY/"
+diff -qr "$PAPER_ACCEPT_ROOT/$PAPER_ACCEPT_NAME/data" "$PAPER_DISK_COPY"
+```
+
+Only after copy and comparison succeed, unmount with `sudo umount
+"$PAPER_ACCEPT_ROOT/$PAPER_ACCEPT_NAME/data"`. Copy the retained files back with
+`cp -a "$PAPER_DISK_COPY/." "$PAPER_ACCEPT_ROOT/$PAPER_ACCEPT_NAME/data/"` and
+retry GameStack start. Record whether partial downloads recover. Keep the copy;
+never exhaust the host's main disk or unmount before preserving the evidence.
+
+### Health failure
+
+On a healthy disposable instance:
+
+```bash
+PAPER_ACCEPT_CID=$(paper_compose ps --quiet server)
+docker pause "$PAPER_ACCEPT_CID"
+gamestack --root "$PAPER_ACCEPT_ROOT" start "$PAPER_ACCEPT_NAME"
+# Record nonzero result; always recover the fixture:
+docker unpause "$PAPER_ACCEPT_CID"
+gamestack --root "$PAPER_ACCEPT_ROOT" start "$PAPER_ACCEPT_NAME"
+```
+
+Record whether Compose rejects the paused state or reaches its health timeout.
+To prove the health-timeout path specifically, use `docker top` as in the crash
+step, send `sudo kill -STOP JAVA_HOST_PID`, run GameStack start, and always send
+`sudo kill -CONT JAVA_HOST_PID` afterward before retrying. The container remains
+running while the game stops responding. A health failure alone is not expected
+to trigger the container restart policy.
+
+## 7. Removal and closeout
+
+Last, stop the disposable manual instance and take a private file-hash inventory.
+Run `gamestack --root "$PAPER_ACCEPT_ROOT" rm "$PAPER_ACCEPT_NAME"` and answer its
+confirmation. Require container removal, all prior files retained unchanged, and
+a new removal marker. Retry the original install command: require rejection and
+unchanged retained files. The automated harness also checks retired-name rejection.
+
+Return the evidence table and sanitized automated report. Mark a criterion passed
+only from its corresponding evidence; record failures and reruns without erasing
+the original results. Fix demonstrated defects and rerun affected checks plus the
+unit suite. Repeat player persistence/lifecycle after pack or runtime changes.
+The pack remains experimental and unsupported/unsellable after this milestone;
+backup, restore, updates, and release clearance are separate gates.

@@ -26,7 +26,7 @@ You should not need to understand Docker Compose, SteamCMD, bind mounts, or Linu
 
 GameStack is currently in **early development: the first v0.1 engine milestone is implemented**. It is not a finished release and no GamePack is supported yet.
 
-The CLI can validate GamePack YAML, prompt for settings, prepare private instance storage, and list configured instances with state and health, and run start/stop/restart/status/doctor commands, plus `rm` to remove an instance while retaining its data. Backup, restore, updates, and real-game acceptance remain pending.
+The CLI can validate GamePack YAML, prompt for settings, prepare private instance storage, and list configured instances with state and health, and run start/stop/restart/status/doctor commands, plus `rm` to remove an instance while retaining its data. An experimental [Minecraft Paper pack](packs/minecraft-paper/README.md) now supplies the first real-game configuration. Its playable milestone passed user-confirmed manual acceptance on 2026-09-06. Backup, restore, safe updates, and final release acceptance remain pending.
 
 - [Try the development CLI](docs/cli.md)
 - [Write a GamePack](docs/gamepacks.md)
@@ -271,29 +271,28 @@ The planned architecture separates generic GameStack functionality from game-spe
              Upstream Game Server
 ```
 
-A possible repository structure:
+The runtime and the first two real GamePacks will be developed together in this
+public repository. The current layout is:
 
 ```text
 gamestack/
+├── README.md
+├── PROJECT.md
+├── AGENTS.md
+├── LICENSE
 ├── src/
 │   └── gamestack/
-│       ├── cli/
-│       ├── config/
-│       ├── docker/
-│       ├── backup/
-│       ├── restore/
-│       ├── update/
-│       ├── health/
-│       └── diagnostics/
-│
 ├── packs/
-│   ├── foundry/
-│   ├── valheim/
-│   └── ...
-│
+│   ├── example/          # Non-runnable schema reference
+│   └── minecraft-paper/ # First real GamePack; experimental
 ├── tests/
-└── docs/
+├── docs/
+└── scripts/             # Build and release tooling
 ```
+
+Game-specific configuration and acceptance material live in `packs/<id>/`;
+generic behavior lives in `src/gamestack/`. The second game has not been selected.
+See the [repository boundaries and separation plan](docs/repository-layout.md).
 
 ---
 
@@ -327,22 +326,24 @@ Focus:
 - diagnostics
 - documentation
 
-The first GamePack is expected to be either:
-
-**Foundry VTT** or **Valheim**
+The first GamePack is **Minecraft Paper**, currently an experimental private Java
+server milestone. See its [walkthrough](packs/minecraft-paper/README.md) and
+[acceptance gates](packs/minecraft-paper/acceptance.md).
 
 ---
 
 ### V0.2 — More Games
 
-Add additional GamePacks while improving the reusable runtime.
+Build the second real GamePack in this repository while improving the reusable
+runtime. Use both implementations to stabilize the pack interface before splitting
+repositories.
 
 Likely candidates:
 
 - Valheim
 - Project Zomboid
 - Satisfactory
-- Minecraft Paper
+- Foundry VTT
 
 ---
 
@@ -398,20 +399,30 @@ Then repeat.
 
 ## Open Source and Commercial GamePacks
 
-GameStack is being designed around a mix of open tooling and polished GamePacks.
+GameStack follows an **open-core + commercial GamePacks** model. The engine stays
+open source under AGPL-3.0, including shared installation, lifecycle, backup,
+restore, update, and diagnostic tooling as those features are implemented. The
+planned public pack specification and community ecosystem make the engine
+understandable, trustworthy, and extensible.
 
-GameStack is licensed under the GNU Affero General Public License v3.0 (see [License](#license)). The commercial GamePack model is still being finalized.
-
-The general direction is to keep enough of the project open to make the system:
-
-- understandable
-- trustworthy
-- extensible
-- useful to the self-hosting community
-
-while potentially offering polished GamePacks and convenience tooling as paid products.
-
+The paid products will be polished official GamePacks: curated game configuration,
+verified versions, acceptance testing, and game-specific setup and recovery guides.
 No paid GamePacks are currently available.
+
+For now, development stays in this repository under its existing license. After
+two real packs establish a stable interface, the planned split is:
+
+| Repository | Visibility | Planned license / terms |
+|---|---|---|
+| `gamestack` | Public | AGPL-3.0 |
+| `pack-spec` | Public | Apache-2.0 |
+| `community-packs` | Public | AGPL-3.0 |
+| `official-packs` | Private | Commercial |
+| `gamestack-site` | Private | Proprietary |
+
+These are future repository boundaries, not repositories or licensing changes
+created by this cleanup. See the [separation plan](docs/repository-layout.md) for
+the extraction gates and current packaging boundaries.
 
 ---
 
@@ -444,7 +455,7 @@ Potential future GamePacks include:
 | Valheim | Planned |
 | Project Zomboid | Planned |
 | Satisfactory | Planned |
-| Minecraft Paper | Planned |
+| Minecraft Paper | Playable milestone passed (user-confirmed manual testing); v0.1 release gates pending |
 | Palworld | Considering |
 | Enshrouded | Considering |
 | V Rising | Considering |

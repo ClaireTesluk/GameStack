@@ -6,7 +6,7 @@ from pathlib import Path
 import sys
 
 from . import __version__
-from .pack import GameStackError, load_pack, read_yaml, string
+from .pack import GameStackError, load_pack, read_yaml, string, validate_value, bind_address
 from .runtime import Runtime
 
 
@@ -26,6 +26,7 @@ def parser() -> argparse.ArgumentParser:
     validate.add_argument("file", type=Path)
     install = commands.add_parser("install", help="Configure a local GamePack and start its server")
     install.add_argument("file", type=Path)
+    install.add_argument("--bind-address", help="Schema 2: numeric host IP; default localhost. 0.0.0.0 exposes game ports on all IPv4 interfaces.")
     install.add_argument("--name", help="Instance name (defaults to pack id)")
     install.add_argument("--values", type=Path, help="YAML mapping of configuration values; keep secrets outside the repository")
     install.add_argument("--prepare-only", action="store_true", help="Write configuration without starting a server or requiring Docker")
@@ -40,8 +41,17 @@ def parser() -> argparse.ArgumentParser:
 def configure(pack: dict, supplied: dict) -> dict:
     if supplied.keys() - pack["environment"].keys():
         raise GameStackError("Unknown configuration settings. Use the environment keys declared in the GamePack.")
+    if any("value" in pack["environment"][key] for key in supplied):
+        raise GameStackError("Fixed GamePack settings cannot be supplied through --values. Remove those keys.")
     values = {}
     for key, setting in pack["environment"].items():
+        if "value" in setting:
+            values[key] = setting["value"]
+            continue
+        if "agreement" in setting and key not in supplied and sys.stdin.isatty():
+            answer = input(f"{setting['prompt']}\n{setting['agreement']}\nAccept? [y/N] ")
+            values[key] = validate_value(key, setting, "TRUE" if answer.strip().lower() in ("y", "yes") else "FALSE")
+            continue
         if key in supplied:
             value = supplied[key]
         elif "default" in setting and not sys.stdin.isatty():
@@ -54,7 +64,7 @@ def configure(pack: dict, supplied: dict) -> dict:
             value = (getpass.getpass(prompt) if setting["secret"] else input(prompt)) or default
         if not string(value):
             raise GameStackError("Settings must be nonempty single-line strings. Quote numbers and booleans in your values file.")
-        values[key] = value
+        values[key] = validate_value(key, setting, value)
     return values
 
 
@@ -68,8 +78,8 @@ def main(argv: list[str] | None = None) -> int:
     logger.propagate = False
     try:
         if args.command == "pack":
-            load_pack(args.file)
-            print("GamePack is valid (schema 1). Image availability and game behavior have not been tested.")
+            pack = load_pack(args.file)
+            print(f"GamePack is valid (schema {pack['schema_version']}). Image availability and game behavior have not been tested.")
             return 0
         runtime = Runtime(args.root)
         if args.command == "rm":
@@ -98,9 +108,14 @@ def main(argv: list[str] | None = None) -> int:
             pack = load_pack(args.file)
             instance = args.name or pack["id"]
             values = configure(pack, read_yaml(args.values) if args.values else {})
+            address = bind_address(args.bind_address or "127.0.0.1")
+            if pack["schema_version"] == 2 and args.bind_address is None and sys.stdin.isatty():
+                answer = input("Allow players on other machines to connect? This exposes game ports on all IPv4 interfaces, including public interfaces if present. Router/firewall settings stay under your control. [y/N] ")
+                if answer.strip().lower() in ("y", "yes"):
+                    address = "0.0.0.0"
             if not args.prepare_only:
                 runtime.doctor()
-            directory = runtime.prepare(pack, instance, values)
+            directory = runtime.prepare(pack, instance, values, address)
             print(f"Prepared {instance}. World folder: {directory / 'data'}")
             if not args.prepare_only:
                 print(f"{instance}: {runtime.lifecycle('start', instance)}")
