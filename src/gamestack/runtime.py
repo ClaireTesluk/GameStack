@@ -12,7 +12,7 @@ import time
 
 import yaml
 
-from .pack import GameStackError, fields, load_pack, name, read_yaml, require, string
+from .pack import GameStackError, fields, load_pack, name, read_yaml, require, validate_values, bind_address
 
 log = logging.getLogger(__name__)
 
@@ -51,19 +51,22 @@ def literal(value):
     return value
 
 
-def compose(pack: dict, values: dict, directory: Path) -> dict:
+def compose(pack: dict, values: dict, directory: Path, deployment: dict | None = None) -> dict:
+    deployment = deployment or {}
     service = {
         "image": pack["image"], "restart": "unless-stopped",
         "stop_grace_period": f'{pack["stop_timeout"]}s',
         "environment": values,
         "ports": [{"target": p["container"], "published": str(p["host"]),
-                   "host_ip": "127.0.0.1", "protocol": p["protocol"]} for p in pack["ports"]],
+                   "host_ip": deployment.get("bind_address", "127.0.0.1"), "protocol": p["protocol"]} for p in pack["ports"]],
         "volumes": [{"type": "bind", "source": str(directory / "data"), "target": pack["data_path"],
                      "bind": {"create_host_path": False}}],
         "healthcheck": {"test": ["CMD", *pack["healthcheck"]], "interval": "10s", "timeout": "5s", "retries": 12},
     }
     if "user" in pack:
-        service["user"] = pack["user"]
+        service["user"] = deployment["user"] if pack["user"] == "installing-user" else pack["user"]
+    if pack["schema_version"] == 2:
+        service["healthcheck"]["start_period"] = f'{pack["startup_timeout"]}s'
     return literal({"services": {"server": service}})
 
 
@@ -98,9 +101,18 @@ class Runtime:
             instances.append(entry.name)
         return instances
 
-    def prepare(self, pack: dict, instance: str, values: dict) -> Path:
-        require(values.keys() == pack["environment"].keys() and all(string(v) for v in values.values()),
-                "Every configuration setting needs a nonempty single-line string.")
+    def prepare(self, pack: dict, instance: str, values: dict, address: str = "127.0.0.1") -> Path:
+        validate_values(pack, values)
+        address = bind_address(address)
+        deployment = {}
+        if pack["schema_version"] == 1:
+            require(address == "127.0.0.1", "Network binding requires GamePack schema 2.")
+        else:
+            deployment["bind_address"] = address
+            if pack.get("user") == "installing-user":
+                if not hasattr(os, "getuid") or not hasattr(os, "getgid") or os.getuid() == 0 or os.getgid() == 0:
+                    raise GameStackError("This GamePack requires a non-root Linux user. Install on the hosting machine using your normal account.")
+                deployment["user"] = f"{os.getuid()}:{os.getgid()}"
         directory = self.directory(instance)
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         try:
@@ -111,8 +123,8 @@ class Runtime:
         # Interrupted setup stays in place for inspection. Never recursively clean up user paths.
         (directory / "data").mkdir(mode=0o700)
         write_private(directory / "pack.yaml", pack)
-        write_private(directory / "compose.yaml", compose(pack, values, directory))
-        write_private(directory / "instance.yaml", {"schema_version": 1, "instance": instance})
+        write_private(directory / "compose.yaml", compose(pack, values, directory, deployment))
+        write_private(directory / "instance.yaml", {"schema_version": pack["schema_version"], "instance": instance, **({"deployment": deployment} if deployment else {})})
         log.info("Prepared instance=%s", instance)
         return directory
 
@@ -124,19 +136,27 @@ class Runtime:
         for filename in ("instance.yaml", "pack.yaml", "compose.yaml", "data"):
             child(directory, filename)
         metadata = read_yaml(directory / "instance.yaml")
-        fields(metadata, {"schema_version", "instance"})
-        require(type(metadata["schema_version"]) is int and metadata["schema_version"] == 1 and metadata["instance"] == instance,
+        fields(metadata, {"schema_version", "instance"}, {"deployment"} if metadata.get("schema_version") == 2 else set())
+        require(type(metadata["schema_version"]) is int and metadata["schema_version"] in (1, 2) and metadata["instance"] == instance,
                 "Instance metadata does not match.")
         pack = load_pack(directory / "pack.yaml")
+        require(metadata["schema_version"] == pack["schema_version"], "Instance and pack schema versions differ.")
         if not (directory / "data").is_dir():
             raise GameStackError("World folder is missing. Recover it before starting the server.")
+        deployment = metadata.get("deployment", {})
+        if pack["schema_version"] == 2:
+            fields(deployment, {"bind_address"} | ({"user"} if pack.get("user") == "installing-user" else set()))
+            require(isinstance(deployment["bind_address"], str) and bind_address(deployment["bind_address"]) == deployment["bind_address"], "Invalid saved bind address.")
+            if pack.get("user") == "installing-user":
+                owner = (directory / "data").stat()
+                require(deployment["user"] == f"{owner.st_uid}:{owner.st_gid}" and owner.st_uid > 0 and owner.st_gid > 0, "World folder ownership differs from the saved server user. Use the original operating account and restore the expected ownership.")
         # Reject hand-edited Compose that could introduce arbitrary host mounts or images.
         document = read_yaml(directory / "compose.yaml")
         try:
             escaped = document["services"]["server"]["environment"]
             values = {k: v.replace("$$", "$") for k, v in escaped.items()}
-            require(values.keys() == pack["environment"].keys() and all(string(v) for v in values.values()), "Invalid saved settings.")
-            require(document == compose(pack, values, directory), "Generated server configuration has changed.")
+            validate_values(pack, values)
+            require(document == compose(pack, values, directory, deployment), "Generated server configuration has changed.")
         except (KeyError, AttributeError, TypeError, RecursionError) as exc:
             raise GameStackError("Saved server configuration is invalid. Recover the original configuration before retrying.") from exc
         return directory, pack
@@ -262,6 +282,10 @@ class Runtime:
             if action in ("stop", "restart"):
                 self.command(base + ["stop", "--timeout", str(pack["stop_timeout"])], pack["stop_timeout"] + 30)
             if action in ("start", "restart"):
-                self.command(base + ["up", "--detach", "--no-recreate", "--pull", "missing", "--wait", "--wait-timeout", "180"], 900)
+                startup_timeout = pack.get("startup_timeout", 180)
+                try:
+                    self.command(base + ["up", "--detach", "--no-recreate", "--pull", "missing", "--wait", "--wait-timeout", str(startup_timeout)], max(900, startup_timeout + 120))
+                except GameStackError as exc:
+                    raise GameStackError(f"Could not start {instance} and confirm its health. Check downloads, free memory/disk, game port conflicts, and world folder permissions. Files were retained; the server may still be running. Run gamestack status {instance} and gamestack doctor {instance} before retrying.") from exc
             log.info("Operation=%s instance=%s completed", action, instance)
         return "stopped" if action == "stop" else "healthy"

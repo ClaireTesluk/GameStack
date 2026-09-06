@@ -106,3 +106,14 @@ PYTHONPATH=src python3 -m unittest discover -s tests -v
 ```
 
 After editable installation, `python -m unittest discover -s tests -v` also works. Tests use temporary synthetic worlds and mock Docker. Passing them does not constitute real Docker or game-server acceptance.
+
+## Experimental Paper installation
+
+`gamestack install packs/minecraft-paper/pack.yaml --bind-address 0.0.0.0`
+configures and starts the experimental private Java server. Follow the
+[Paper walkthrough](../packs/minecraft-paper/README.md) for EULA acceptance,
+profile names, defaults, expected results, networking, and failure recovery.
+
+`--bind-address` is available for schema 2; omitted means localhost unless an
+interactive user explicitly chooses exposure. All-interface binding can expose
+the game port publicly. Existing schema 1 instances are unchanged.

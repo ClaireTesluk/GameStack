@@ -1,4 +1,12 @@
-# Experimental GamePack schema 1
+# Experimental GamePack schemas
+
+Pack definitions and their game-specific guides, upstream records, and acceptance
+material belong in `packs/<id>/`. The runtime validator and this provisional
+specification stay in this repository through the first two real packs. See the
+[repository separation plan](repository-layout.md) for the future public interface
+and commercial pack boundaries.
+
+## Schema 1
 
 Use [packs/example/pack.yaml](../packs/example/pack.yaml) as the format reference. It intentionally names a nonexistent image and healthcheck: validation proves structure, not deployability. It is not a supported game or a distributable server.
 
@@ -44,3 +52,46 @@ An installation snapshots `pack.yaml`, creates `data/` and `compose.yaml`, then 
 ## Before calling a real GamePack supported
 
 Document the upstream project, image digest, upstream license/notices, game software licensing, supported game version, hardware recommendations, exposed port purposes/protocols, storage and ownership, healthcheck, shutdown behavior, backup/update behavior, and known limitations. Run all GamePack acceptance criteria in AGENTS.md on the supported host. Schema validation is only the first check.
+
+## Schema 2: first real GamePack
+
+Schema 1 remains accepted and renders exactly the original localhost-only Compose
+configuration. Schema 2 requires `startup_timeout` (integer 30–1800 seconds), used
+for Compose health startup grace and the bounded start wait. `stop_timeout` is
+unchanged. The optional `user: installing-user` resolves the installing account's
+nonzero UID:GID on POSIX and persists it; hosting remains Linux x86-64. Preparation
+of that mode on Windows or as root fails before creating storage. Numeric users
+remain accepted; authors must provision matching storage themselves.
+
+Each environment entry is either:
+
+- `{value: "literal"}`: fixed, never prompted and forbidden in `--values`, even
+  when the supplied value matches; or
+- the schema 1 prompt/secret/default entry, optionally with `constraints` or
+  `agreement`.
+
+`constraints` requires a string of allowed `characters`, integer `min_length` and
+`max_length` (1–1024), and optionally one `separator` character outside the allowed
+set. Every separated item must satisfy the constraints; empty entries and spaces
+are not silently removed. Constrained input is limited to 4096 characters. This
+small character/length validator deliberately does not execute pack-supplied regex.
+
+`agreement` is an HTTPS terms URL, with no default and `secret: false`. Interactive
+acceptance defaults to no. A values file must supply the exact string `"TRUE"`;
+YAML boolean `true` is not accepted. Validation occurs before instance creation or
+server downloads. Agreement acceptance is retained in private instance configuration.
+
+Schema 2 instance metadata stores `deployment.bind_address` and, for
+`installing-user`, resolved `deployment.user`. The latter must match the world
+folder owner when inspected; it is never recalculated from the current caller.
+Generated configuration is checked against this metadata and the snapshotted pack.
+No existing instance is migrated or rewritten.
+
+Install `--bind-address` accepts a numeric IPv4 or IPv6 address; scoped and multicast
+addresses are rejected. The default is `127.0.0.1`. Interactive schema 2 setup offers
+all-IPv4-interface exposure, default no. Explicit `0.0.0.0` or `::` includes public
+interfaces when present; these are not LAN-only controls. Schema 1 rejects an
+explicit non-localhost binding. Router and firewall configuration remains manual.
+
+The experimental [Paper pack](../packs/minecraft-paper/README.md) demonstrates this
+schema. Validation does not certify licensing completeness or live-game acceptance.

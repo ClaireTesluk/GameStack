@@ -120,6 +120,7 @@ def native(target):
     bundle = work / "dist/gamestack"
     shutil.copytree(ROOT / "docs", bundle / "docs")
     shutil.copytree(ROOT / "packs/example", bundle / "example")
+    shutil.copytree(ROOT / "packs/minecraft-paper", bundle / "packs/minecraft-paper")
     for filename in ("LICENSE", "THIRD_PARTY.md", "README.md"):
         shutil.copyfile(ROOT / filename, bundle / filename)
     notices = bundle / "licenses"
