@@ -1,4 +1,8 @@
-"""Schema 2 contracts, without Docker, game downloads, or EULA acceptance."""
+"""Schema 2 contracts, without Docker, game downloads, or EULA acceptance.
+
+Resolve temporary storage roots because macOS temp paths can contain symlinks.
+The runtime intentionally rejects symlinks in user-supplied storage paths.
+"""
 import copy
 import contextlib
 import io
@@ -85,7 +89,7 @@ class PaperTests(unittest.TestCase):
     @unittest.skipUnless(hasattr(os, 'getuid') and os.getuid() > 0 and os.getgid() > 0, 'requires non-root POSIX owner')
     def test_prepare_inspect_persistence_and_tamper(self):
         with tempfile.TemporaryDirectory() as tmp:
-            runtime = Runtime(Path(tmp) / 'instances')
+            runtime = Runtime(Path(tmp).resolve() / 'instances')
             directory = runtime.prepare(self.pack, 'friends', self.values(), '0.0.0.0')
             metadata = yaml.safe_load((directory / 'instance.yaml').read_text())
             self.assertEqual(metadata['deployment']['user'], f'{os.getuid()}:{os.getgid()}')
@@ -106,7 +110,7 @@ class PaperTests(unittest.TestCase):
 
     def test_invalid_values_do_not_create_storage(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp) / 'instances'
+            root = Path(tmp).resolve() / 'instances'
             values = self.values()
             values['EULA'] = 'FALSE'
             with self.assertRaises(GameStackError):
@@ -116,7 +120,7 @@ class PaperTests(unittest.TestCase):
     def test_schema_one_rejects_network_exposure_before_writes(self):
         pack = load_pack(PACK.parents[1] / 'example/pack.yaml')
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp) / 'instances'
+            root = Path(tmp).resolve() / 'instances'
             with self.assertRaises(GameStackError):
                 Runtime(root).prepare(pack, 'friends', {'SERVER_NAME': 'Friends', 'SERVER_PASSWORD': 'synthetic'}, '0.0.0.0')
             self.assertFalse(root.exists())
@@ -124,7 +128,7 @@ class PaperTests(unittest.TestCase):
     @unittest.skipUnless(hasattr(os, 'getuid') and os.getuid() > 0 and os.getgid() > 0, 'requires non-root POSIX owner')
     def test_health_failure_retains_files_and_hides_tool_output(self):
         with tempfile.TemporaryDirectory() as tmp:
-            runtime = Runtime(Path(tmp) / 'instances')
+            runtime = Runtime(Path(tmp).resolve() / 'instances')
             directory = runtime.prepare(self.pack, 'friends', self.values())
             world = directory / 'data' / 'synthetic-world'
             world.write_text('keep me')
@@ -139,7 +143,7 @@ class PaperTests(unittest.TestCase):
     @unittest.skipUnless(hasattr(os, 'getuid') and os.getuid() > 0 and os.getgid() > 0, 'requires non-root POSIX owner')
     def test_saved_identity_and_address_checked_on_inspection(self):
         with tempfile.TemporaryDirectory() as tmp:
-            runtime = Runtime(Path(tmp) / 'instances')
+            runtime = Runtime(Path(tmp).resolve() / 'instances')
             directory = runtime.prepare(self.pack, 'friends', self.values())
             # A caller's identity does not silently rewrite the saved identity.
             with patch('gamestack.runtime.os.getuid', return_value=os.getuid() + 1):
@@ -169,7 +173,7 @@ class PaperTests(unittest.TestCase):
 
     def test_root_identity_rejected_before_writes(self):
         with tempfile.TemporaryDirectory() as tmp, patch('gamestack.runtime.os.getuid', return_value=0, create=True), patch('gamestack.runtime.os.getgid', return_value=0, create=True):
-            root = Path(tmp) / 'instances'
+            root = Path(tmp).resolve() / 'instances'
             with self.assertRaises(GameStackError):
                 Runtime(root).prepare(self.pack, 'friends', self.values())
             self.assertFalse(root.exists())
