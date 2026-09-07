@@ -88,6 +88,8 @@ def smoke(command, expected):
         values.write_text('SERVER_NAME: CI\nSERVER_PASSWORD: "synthetic-ci-password"\n', encoding="utf-8")
         common = ["--root", str(storage)]
         invoke([*common, "install", str(pack), "--prepare-only", "--name", "smoke", "--values", str(values)])
+        assert "No completed backups found" in invoke([*common, "backup", "list", "smoke"])
+        invoke([*common, "backup", "verify", "smoke", "invalid-id"], success=False)
         assert "smoke: unknown (status unavailable)" in invoke([*common, "list"])
         invoke([*common, "rm", "smoke"], success=False)
         assert (storage / "smoke/instance.yaml").exists()

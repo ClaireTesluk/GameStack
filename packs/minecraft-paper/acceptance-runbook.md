@@ -290,3 +290,23 @@ the original results. Fix demonstrated defects and rerun affected checks plus th
 unit suite. Repeat player persistence/lifecycle after pack or runtime changes.
 The pack remains experimental and unsupported/unsellable after this milestone;
 backup, restore, updates, and release clearance are separate gates.
+
+## Manual backup validation
+
+**Passed — user-confirmed manual command validation, 2026-09-06.** The user
+reports that the backup command works as intended when exercised manually.
+This is additional evidence beyond the earlier playable milestone sign-off.
+Backups remain uncompressed `.tar` archives; no backup behavior changed.
+
+The confirmation does not enumerate individual scenarios or supply command output,
+host details, or a candidate revision. It does not establish that the opt-in
+automated Paper harness, corruption/failure scenarios, or restore acceptance passed.
+The detailed checklist in [acceptance.md](acceptance.md) remains available for
+scenario-specific evidence and repeat testing.
+
+For repeat validation:
+Use only this runbook's disposable instance. Run `gamestack backup INSTANCE` while
+running, check healthy resume, then stop and repeat to confirm it stays stopped.
+Record IDs from `gamestack backup list INSTANCE` and run
+`gamestack backup verify INSTANCE BACKUP-ID` for each. Keep archived configuration
+private. Integrity checks do not replace a later actual restore test.

@@ -1,6 +1,6 @@
 # Using the development CLI
 
-This is the first engine milestone, version `0.1.0.dev1`. No game is supported yet. Backup, restore, updates, and scheduled maintenance are pending; use synthetic data for development.
+This is the first engine milestone, version `0.1.0.dev1`. No game is supported yet. Manual backup creation, listing, and integrity verification are implemented. Restore, retention, updates, and scheduled maintenance are pending; use synthetic data for development.
 
 ## Setup
 
@@ -42,6 +42,9 @@ Use `gamestack --root /srv/gamestack ...` to choose a dedicated writable storage
 | Restart | `gamestack restart friends` | Stopped then healthy | Failed stop prevents start; failed health leaves data in place |
 | Status | `gamestack status friends` | Container state and health, or not created | Correct missing/incomplete configuration; run doctor |
 | Check prerequisites | `gamestack doctor` | Docker access and Compose capability pass | Install/start Docker and grant the operating account access |
+| Create backup | `gamestack backup friends` | Verified archive location and final server state | Check disk space, permissions, and clean shutdown; partial artifacts retained |
+| List backups | `gamestack backup list friends` | Newest-first IDs, UTC dates, and sizes; no integrity recheck | Check instance name, root, and backup folder access |
+| Verify backup | `gamestack backup verify friends BACKUP-ID` | Full archive integrity verified without extraction | Keep corrupt/incomplete archives and select another copy |
 | Check instance | `gamestack doctor friends` | Also validates saved configuration and world-folder existence | Restore missing configuration/data; do not bypass safety checks |
 
 Global options precede the command: `gamestack --debug --root /srv/gamestack status friends`. Debug logs include safe operation boundaries, elapsed subprocess time, and failure type, never raw server output. There is no logs command yet because arbitrary upstream logs can expose credentials.
@@ -117,3 +120,63 @@ profile names, defaults, expected results, networking, and failure recovery.
 `--bind-address` is available for schema 2; omitted means localhost unless an
 interactive user explicitly chooses exposure. All-interface binding can expose
 the game port publicly. Existing schema 1 instances are unchanged.
+
+## Manual backups
+
+```bash
+gamestack backup friends
+gamestack backup list friends
+gamestack backup verify friends BACKUP-ID
+```
+
+Replace `BACKUP-ID` with an ID from the listing, without a file extension. Global
+options still precede the command. Instance names `list` and `verify` remain valid:
+`gamestack backup list` creates a backup of the instance named `list`.
+
+Creation briefly stops a running server without an extra confirmation prompt,
+checks its clean exit, captures and verifies its files, then restarts it and checks
+health. Players will be disconnected. Previously stopped or never-started instances
+remain stopped. Docker must be available even when no container has been created.
+Crashes, ambiguous states, and unsuccessful shutdowns block capture; inspect status
+and resolve the server problem before retrying.
+
+Success prints a verified ID, absolute location, and final server state. Archives
+live in `<root>/<instance>/backups/` as timestamped, uniquely identified `.tar` files.
+They contain the entire `data/` folder and saved instance, pack, and Compose
+configuration. Modes and modification times are retained; links and special files
+are rejected. Backup files are private (`0600`) inside a private folder (`0700`) on
+Linux. They are **unencrypted and may contain credentials**; keep them private.
+Do not modify source data through other tools while capture runs.
+
+Archives are uncompressed, so allow approximately the full data/configuration size
+plus headers, manifest allowance, and at least 64 MiB of free-space reserve. All
+backups are retained. There is no automatic pruning, restore command, scheduling,
+custom destination, exclusion list, or compression option in this milestone.
+
+Listing works without Docker, displays IDs, UTC timestamps and sizes newest first,
+and does not recheck integrity. Empty listings succeed. Verification reads every
+archived file and checks its hash, metadata, and archive structure without extracting
+anything. Both commands remain available after `rm`, or if the active data folder
+is missing, provided the instance and backup folders remain at their original paths.
+Verification detects corruption; it neither authenticates an archive nor proves
+that Minecraft can restore it. Restore acceptance remains pending.
+
+Failures return exit status 1, and interrupts return 130:
+
+- Insufficient space or unsafe source paths found before shutdown leave the server
+  running. Free space or correct the source layout and retry.
+- Failed/unverified shutdown prevents capture and automatic restart. Check
+  `gamestack status friends` and `gamestack doctor friends` before restarting.
+- Capture failure after verified shutdown still attempts to resume an initially
+  running server; the backup command remains unsuccessful.
+- Failed restart after a verified backup retains the archive and prints its usable
+  location. Check status/doctor before retrying `gamestack start friends`.
+- Partial `.partial` artifacts are retained and warned about in listings, never
+  treated as completed backups. Older backups and source files are preserved.
+- Interrupts retain created artifacts and do not automatically restart the server.
+  Check status before acting. Abrupt termination may leave the existing operation
+  lock; follow the interrupted-operation instructions above.
+
+A nonzero result can coexist with a valid retained backup. Read the result before
+retrying. Do not manually remove partial files or stale locks while an operation is
+still running. No backup deletion is performed by GameStack.

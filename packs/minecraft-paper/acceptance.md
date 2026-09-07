@@ -89,3 +89,20 @@ Verified backup/retention, safety snapshots and restore, backup-first explicit u
 failed-update recovery, full license/packaging clearance, and final clean-host release
 acceptance remain pending. Do not mark the pack supported or sellable on the basis
 of schema validation or the opt-in smoke test.
+
+## Manual backup acceptance — pending
+
+The opt-in host harness now captures and verifies disposable Paper data while
+running (including healthy resume) and while stopped. Prior playable sign-off does
+not cover these new checks. Record fresh host evidence before marking them passed.
+
+- [ ] Place recognizable blocks and obtain inventory in a disposable world.
+- [ ] Run manual backup while online; confirm disconnect, verified artifact, and healthy resume.
+- [ ] Stop and back up again; confirm the server remains stopped.
+- [ ] List and verify both archives; check all dimensions, player data, permissions,
+      and saved configuration are represented without disclosing credentials.
+- [ ] On a copy of an archive, alter payload bytes and confirm verification fails.
+- [ ] Exercise failed capture/restart on disposable data; retain older backups and
+      source files and record actionable failure output.
+
+Restore, retention, and failed-update recovery remain separate pending release gates.

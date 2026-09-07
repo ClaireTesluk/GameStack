@@ -17,6 +17,8 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--root", type=Path, default=Path.home() / ".local" / "share" / "gamestack", help="Dedicated instance storage directory")
     commands = result.add_subparsers(dest="command", required=True)
     commands.add_parser("list", help="List configured instances with container state and health")
+    backup = commands.add_parser("backup", help="Create, list, or verify private full-data backups")
+    backup.add_argument("arguments", nargs="+", metavar="ARG", help="INSTANCE | list INSTANCE | verify INSTANCE BACKUP-ID")
     remove = commands.add_parser("rm", help="Remove an instance's container, retaining worlds, backups, and configuration")
     remove.add_argument("instance")
     remove.add_argument("--yes", action="store_true", help="Confirm container removal without prompting")
@@ -82,6 +84,27 @@ def main(argv: list[str] | None = None) -> int:
             print(f"GamePack is valid (schema {pack['schema_version']}). Image availability and game behavior have not been tested.")
             return 0
         runtime = Runtime(args.root)
+        if args.command == "backup":
+            from . import backup
+            parts = args.arguments
+            if len(parts) == 1:
+                instance = parts[0]
+                print("Backup will stop a running server temporarily and restart it after capture.", flush=True)
+                artifact, state = runtime.backup(instance)
+                print(f"Verified backup: {artifact.stem}\nLocation: {artifact}\n{instance}: {state}")
+            elif len(parts) == 2 and parts[0] == "list":
+                records = backup.list_backups(runtime.directory(parts[1]))
+                print("Completed backups (listing does not recheck integrity):")
+                for record in records:
+                    print(f"  {record.id}  {record.created_utc}  {record.size} bytes")
+                if not records:
+                    print("No completed backups found.")
+            elif len(parts) == 3 and parts[0] == "verify":
+                backup.verify(backup.selected(runtime.directory(parts[1]), parts[2]), parts[1])
+                print("Backup integrity verified. This does not authenticate the archive or prove restoration.")
+            else:
+                raise GameStackError("Use gamestack backup INSTANCE, backup list INSTANCE, or backup verify INSTANCE BACKUP-ID.")
+            return 0
         if args.command == "rm":
             directory, _ = runtime.inspect(args.instance)
             if not args.yes:

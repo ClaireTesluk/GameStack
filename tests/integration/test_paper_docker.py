@@ -12,6 +12,7 @@ import tempfile
 import unittest
 import uuid
 
+from gamestack.backup import verify
 from gamestack.cli import configure
 from gamestack.pack import GameStackError, load_pack
 from gamestack.runtime import Runtime
@@ -130,7 +131,15 @@ class PaperIntegration(unittest.TestCase):
             self.assertIn(lock['paper']['sha256'], hashes.values())
             report['paper'] = lock['paper']
             report['artifact_hashes'] = hashes
+            artifact, state = runtime.backup(instance)
+            self.assertEqual(state, 'healthy')
+            manifest = verify(artifact, instance)
+            self.assertTrue(any(entry['path'].endswith('/level.dat') for entry in manifest['entries']))
+            report['backup'] = {'id': artifact.stem, 'integrity': 'passed', 'restart': state}
             stop_cleanly(first)
+            artifact, state = runtime.backup(instance)
+            self.assertEqual(state, 'stopped')
+            verify(artifact, instance)
             lifecycle('restart')
             self.assertEqual(artifact_hashes(), hashes)
             stop_cleanly(first)

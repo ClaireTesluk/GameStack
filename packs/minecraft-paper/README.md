@@ -1,7 +1,7 @@
 # GameStack — private server for Minecraft Java (Paper)
 
-**Experimental playable milestone.** Backup, restore, and safe update commands do
-not exist yet. Use a disposable new world for evaluation. This pack is not yet a
+**Experimental playable milestone.** Manual backup creation and integrity checks
+are implemented; restore and safe updates remain pending. Use a disposable new world for evaluation. This pack is not yet a
 supported or sellable release. The playable milestone passed all manual acceptance
 checks, confirmed by the user on 2026-09-06; see [the acceptance record](acceptance.md).
 
@@ -152,3 +152,19 @@ Selection reviewed 2026-09-05: Paper 26.2 build 121, Java 25 Temurin image. See
 [upstream-lock.json](upstream-lock.json), [license inventory](license-inventory.json),
 and [third-party review](../../THIRD_PARTY.md). Official sources were used because
 Context7 was unavailable. No game JARs, images, or game assets are redistributed.
+
+## Experimental manual backup
+
+Run `gamestack backup minecraft-paper` (substitute your instance name). Players
+are disconnected during stopped-state capture; an initially running server resumes
+with a health check. The archive captures all dimensions, player data, allowlist,
+operators, and other files under `data/`, plus saved GameStack configuration.
+
+Use `gamestack backup list minecraft-paper`, then
+`gamestack backup verify minecraft-paper BACKUP-ID` to recheck integrity offline.
+Archives are uncompressed, unencrypted, private files under the instance's
+`backups/` folder. Keep all copies private and allow room for a full data copy.
+No copies are pruned. See the [backup guide](../../docs/cli.md#manual-backups) for
+failures, retained partial artifacts, and restart guidance. Restore and real-world
+recovery acceptance remain pending; integrity verification does not make this pack
+supported.

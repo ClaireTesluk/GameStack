@@ -4,11 +4,13 @@ import hashlib
 import json
 import logging
 import os
+import re
 from pathlib import Path
 import platform
 import shutil
 import subprocess
 import time
+import tarfile
 
 import yaml
 
@@ -258,6 +260,71 @@ class Runtime:
             log.warning("Status unavailable for instance=%s. Check Docker access with gamestack doctor.", instance)
             return "unknown (status unavailable)"
 
+    def backup_state(self, directory: Path) -> str:
+        """Fail closed on anything other than one unambiguous safe container state."""
+        raw = self.command(self.compose_command(directory) + ["ps", "--all", "--quiet", "server"])
+        ids = raw.split()
+        if not ids:
+            return "absent"
+        try:
+            if len(ids) != 1 or not re.fullmatch(r"[a-f0-9]{12,64}", ids[0]):
+                raise ValueError("Ambiguous containers")
+            state = json.loads(self.command(["docker", "inspect", "--format", "{{json .State}}", ids[0]]))
+            status = state["Status"]
+            if (state["OOMKilled"] is not False or state["Paused"] is not False or
+                    state["Restarting"] is not False or state["Dead"] is not False or
+                    type(state["ExitCode"]) is not int or state["ExitCode"] != 0 or
+                    state["Running"] is not (status == "running") or
+                    status not in ("running", "exited", "created")):
+                raise ValueError("Unsafe state")
+            return status
+        except (ValueError, TypeError, KeyError) as exc:
+            raise GameStackError("Cannot establish a safe server state for backup. Check gamestack status and doctor with the instance name; resolve crashes or incomplete shutdown before retrying.") from None
+
+    def backup(self, instance: str) -> tuple[Path, str]:
+        from . import backup
+        directory, pack = self.inspect(instance)
+        with self.lock(directory):
+            self.inspect(instance)
+            self.doctor()
+            log.info("Backup phase=preflight instance=%s", instance)
+            initial = self.backup_state(directory)
+            backup.preflight(directory)
+            if initial == "running":
+                log.info("Backup phase=stop instance=%s", instance)
+                self.command(self.compose_command(directory) + ["stop", "--timeout", str(pack["stop_timeout"]), "server"], pack["stop_timeout"] + 30)
+                if self.backup_state(directory) != "exited":
+                    raise GameStackError("Backup stopped: clean shutdown could not be verified. No completed backup was created. Check server status before restarting.")
+            artifact = None
+            failure = None
+            try:
+                artifact = backup.create(directory, instance, pack, initial)
+            except (GameStackError, OSError, tarfile.TarError, UnicodeError) as exc:
+                log.debug("Backup failed type=%s", type(exc).__name__)
+                failure = exc
+            # Deliberately not finally: interruption must not unexpectedly start a server.
+            if initial == "running":
+                log.info("Backup phase=restart instance=%s", instance)
+                try:
+                    self.start_server(directory, pack, instance)
+                except (GameStackError, OSError):
+                    result = f"Verified backup retained at: {artifact}." if artifact else "Backup failed; partial artifacts and existing data were retained."
+                    raise GameStackError(f"{result} Server restart or health verification also failed. Run gamestack status {instance} and gamestack doctor {instance} before retrying start.") from None
+            if failure is not None:
+                state = "Server restarted and healthy." if initial == "running" else "Server remains stopped."
+                detail = str(failure) if isinstance(failure, GameStackError) else "Check free disk space and backup folder permissions."
+                raise GameStackError(f"Backup failed. {detail} {state} Partial artifacts and older backups were retained.") from None
+            return artifact, "healthy" if initial == "running" else "stopped"
+
+    def start_server(self, directory: Path, pack: dict, instance: str) -> None:
+        """Start with health verification; caller holds the instance lock."""
+        base = self.compose_command(directory)
+        startup_timeout = pack.get("startup_timeout", 180)
+        try:
+            self.command(base + ["up", "--detach", "--no-recreate", "--pull", "missing", "--wait", "--wait-timeout", str(startup_timeout)], max(900, startup_timeout + 120))
+        except GameStackError as exc:
+            raise GameStackError(f"Could not start {instance} and confirm its health. Check downloads, free memory/disk, game port conflicts, and world folder permissions. Files were retained; the server may still be running. Run gamestack status {instance} and gamestack doctor {instance} before retrying.") from exc
+
     def lifecycle(self, action: str, instance: str) -> str:
         directory, pack = self.inspect(instance)
         base = self.compose_command(directory)
@@ -282,10 +349,6 @@ class Runtime:
             if action in ("stop", "restart"):
                 self.command(base + ["stop", "--timeout", str(pack["stop_timeout"])], pack["stop_timeout"] + 30)
             if action in ("start", "restart"):
-                startup_timeout = pack.get("startup_timeout", 180)
-                try:
-                    self.command(base + ["up", "--detach", "--no-recreate", "--pull", "missing", "--wait", "--wait-timeout", str(startup_timeout)], max(900, startup_timeout + 120))
-                except GameStackError as exc:
-                    raise GameStackError(f"Could not start {instance} and confirm its health. Check downloads, free memory/disk, game port conflicts, and world folder permissions. Files were retained; the server may still be running. Run gamestack status {instance} and gamestack doctor {instance} before retrying.") from exc
+                self.start_server(directory, pack, instance)
             log.info("Operation=%s instance=%s completed", action, instance)
         return "stopped" if action == "stop" else "healthy"
