@@ -310,3 +310,36 @@ running, check healthy resume, then stop and repeat to confirm it stays stopped.
 Record IDs from `gamestack backup list INSTANCE` and run
 `gamestack backup verify INSTANCE BACKUP-ID` for each. Keep archived configuration
 private. Integrity checks do not replace a later actual restore test.
+
+## Manual restore validation
+
+**Passed — user-confirmed manual testing, 2026-09-06.** The user reports that
+manual testing of restore passed. This records the manual result; individual
+scenarios, host details, command output, and the tested revision were not supplied.
+The detailed checklist in [acceptance.md](acceptance.md#restore-acceptance--pending)
+remains available for scenario-specific evidence. This does not mark retention,
+safe updates, or final release acceptance complete.
+
+For repeat validation:
+
+Use this runbook's disposable instance and the same root/account throughout. Do
+not use an irreplaceable world. Record the tested revision and pack/image pins.
+
+1. Join in Minecraft Java, build a recognizable structure, and note its coordinates.
+   Run `gamestack backup INSTANCE`; record the resulting ID as the earlier backup.
+2. Change the structure and your inventory. Run `gamestack restore INSTANCE` and
+   choose the earlier backup. Confirm the printed scope and disconnection warning.
+3. Record the generated safety backup ID and retained recovery directory. Confirm
+   healthy completion, reconnect, and check the earlier structure/player state.
+4. Run `gamestack restore INSTANCE SAFETY-BACKUP-ID`. Reconnect after healthy
+   completion and verify the later structure/player state returns.
+5. Stop the server, restore the earlier backup again, and verify the result says
+   `stopped (health not tested)`. Start it explicitly and check the world again.
+6. Verify both archive IDs with `gamestack backup verify INSTANCE BACKUP-ID`.
+   Confirm current GameStack configuration files were unchanged and preserve all
+   archives/recovery folders. Complete the failure/recovery scenarios in
+   [acceptance.md](acceptance.md#restore-acceptance--pending) using synthetic data.
+
+Record actual outcomes for repeat runs; unit tests or archive verification alone
+do not establish in-game recovery. For failures or interruptions, follow the
+[restore recovery procedure](../../docs/cli.md#interrupted-restore-recovery).

@@ -8,13 +8,18 @@ import re
 from pathlib import Path
 import platform
 import shutil
+import stat
 import subprocess
 import time
 import tarfile
+from typing import TYPE_CHECKING
 
 import yaml
 
 from .pack import GameStackError, fields, load_pack, name, read_yaml, require, validate_values, bind_address
+
+if TYPE_CHECKING:
+    from .restore import RestoreResult
 
 log = logging.getLogger(__name__)
 
@@ -70,6 +75,27 @@ def compose(pack: dict, values: dict, directory: Path, deployment: dict | None =
     if pack["schema_version"] == 2:
         service["healthcheck"]["start_period"] = f'{pack["startup_timeout"]}s'
     return literal({"services": {"server": service}})
+
+
+def validate_configuration(metadata: dict, pack: dict, document: dict, directory: Path, instance: str) -> None:
+    fields(metadata, {"schema_version", "instance"}, {"deployment"} if metadata.get("schema_version") == 2 else set())
+    require(type(metadata["schema_version"]) is int and metadata["schema_version"] in (1, 2) and metadata["instance"] == instance,
+            "Instance metadata does not match.")
+    require(metadata["schema_version"] == pack["schema_version"], "Instance and pack schema versions differ.")
+    deployment = metadata.get("deployment", {})
+    if pack["schema_version"] == 2:
+        fields(deployment, {"bind_address"} | ({"user"} if pack.get("user") == "installing-user" else set()))
+        require(isinstance(deployment["bind_address"], str) and bind_address(deployment["bind_address"]) == deployment["bind_address"], "Invalid saved bind address.")
+        if pack.get("user") == "installing-user":
+            require(isinstance(deployment["user"], str) and re.fullmatch(r"[1-9][0-9]*:[1-9][0-9]*", deployment["user"]), "Invalid saved server user.")
+    # Reject hand-edited Compose that could introduce arbitrary host mounts or images.
+    try:
+        escaped = document["services"]["server"]["environment"]
+        values = {k: v.replace("$$", "$") for k, v in escaped.items()}
+        validate_values(pack, values)
+        require(document == compose(pack, values, directory, deployment), "Generated server configuration has changed.")
+    except (KeyError, AttributeError, TypeError, RecursionError) as exc:
+        raise GameStackError("Saved server configuration is invalid. Recover the original configuration before retrying.") from exc
 
 
 class Runtime:
@@ -130,37 +156,35 @@ class Runtime:
         log.info("Prepared instance=%s", instance)
         return directory
 
-    def inspect(self, instance: str) -> tuple[Path, dict]:
+    def inspect(self, instance: str, *, allow_missing_data: bool = False) -> tuple[Path, dict]:
         directory = self.directory(instance)
         marker = child(directory, "removed.yaml")
         if marker.exists():
             raise GameStackError("This instance was removed. Its files remain in the instance directory for recovery; choose a new name for a new installation.")
         for filename in ("instance.yaml", "pack.yaml", "compose.yaml", "data"):
-            child(directory, filename)
+            path = child(directory, filename)
+            if filename != "data":
+                try:
+                    regular = stat.S_ISREG(path.lstat().st_mode)
+                except OSError:
+                    regular = False
+                if not regular:
+                    raise GameStackError("Saved configuration must use accessible regular files. Recover the original configuration before retrying.")
         metadata = read_yaml(directory / "instance.yaml")
-        fields(metadata, {"schema_version", "instance"}, {"deployment"} if metadata.get("schema_version") == 2 else set())
-        require(type(metadata["schema_version"]) is int and metadata["schema_version"] in (1, 2) and metadata["instance"] == instance,
-                "Instance metadata does not match.")
         pack = load_pack(directory / "pack.yaml")
-        require(metadata["schema_version"] == pack["schema_version"], "Instance and pack schema versions differ.")
-        if not (directory / "data").is_dir():
-            raise GameStackError("World folder is missing. Recover it before starting the server.")
-        deployment = metadata.get("deployment", {})
-        if pack["schema_version"] == 2:
-            fields(deployment, {"bind_address"} | ({"user"} if pack.get("user") == "installing-user" else set()))
-            require(isinstance(deployment["bind_address"], str) and bind_address(deployment["bind_address"]) == deployment["bind_address"], "Invalid saved bind address.")
-            if pack.get("user") == "installing-user":
-                owner = (directory / "data").stat()
-                require(deployment["user"] == f"{owner.st_uid}:{owner.st_gid}" and owner.st_uid > 0 and owner.st_gid > 0, "World folder ownership differs from the saved server user. Use the original operating account and restore the expected ownership.")
-        # Reject hand-edited Compose that could introduce arbitrary host mounts or images.
         document = read_yaml(directory / "compose.yaml")
+        validate_configuration(metadata, pack, document, directory, instance)
+        data = directory / "data"
         try:
-            escaped = document["services"]["server"]["environment"]
-            values = {k: v.replace("$$", "$") for k, v in escaped.items()}
-            validate_values(pack, values)
-            require(document == compose(pack, values, directory, deployment), "Generated server configuration has changed.")
-        except (KeyError, AttributeError, TypeError, RecursionError) as exc:
-            raise GameStackError("Saved server configuration is invalid. Recover the original configuration before retrying.") from exc
+            owner = data.lstat()
+        except FileNotFoundError:
+            if not allow_missing_data:
+                raise GameStackError("World folder is missing. Use gamestack restore to recover a backup.") from None
+        else:
+            require(stat.S_ISDIR(owner.st_mode), "World folder is not a directory.")
+            if pack.get("user") == "installing-user":
+                require(metadata["deployment"]["user"] == f"{owner.st_uid}:{owner.st_gid}" and owner.st_uid > 0 and owner.st_gid > 0,
+                        "World folder ownership differs from the saved server user. Use the original operating account and restore the expected ownership.")
         return directory, pack
 
     @contextmanager
@@ -215,6 +239,8 @@ class Runtime:
         """Remove the server container and retire its configuration, retaining all files."""
         directory, pack = self.inspect(instance)
         with self.lock(directory):
+            from .restore import require_no_transaction
+            require_no_transaction(directory)
             self.inspect(instance)
             self.doctor()
             base = self.compose_command(directory)
@@ -261,6 +287,12 @@ class Runtime:
             return "unknown (status unavailable)"
 
     def backup_state(self, directory: Path) -> str:
+        return self.server_state(directory)
+
+    def restore_state(self, directory: Path) -> str:
+        return self.server_state(directory, allow_crashed=True)
+
+    def server_state(self, directory: Path, *, allow_crashed: bool = False) -> str:
         """Fail closed on anything other than one unambiguous safe container state."""
         raw = self.command(self.compose_command(directory) + ["ps", "--all", "--quiet", "server"])
         ids = raw.split()
@@ -271,6 +303,10 @@ class Runtime:
                 raise ValueError("Ambiguous containers")
             state = json.loads(self.command(["docker", "inspect", "--format", "{{json .State}}", ids[0]]))
             status = state["Status"]
+            if (allow_crashed and status == "exited" and state["Running"] is False and
+                    state["Paused"] is False and state["Restarting"] is False and state["Dead"] is False and
+                    type(state["OOMKilled"]) is bool and type(state["ExitCode"]) is int and state["ExitCode"] >= 0):
+                return "crashed" if state["OOMKilled"] or state["ExitCode"] else "exited"
             if (state["OOMKilled"] is not False or state["Paused"] is not False or
                     state["Restarting"] is not False or state["Dead"] is not False or
                     type(state["ExitCode"]) is not int or state["ExitCode"] != 0 or
@@ -279,12 +315,18 @@ class Runtime:
                 raise ValueError("Unsafe state")
             return status
         except (ValueError, TypeError, KeyError) as exc:
-            raise GameStackError("Cannot establish a safe server state for backup. Check gamestack status and doctor with the instance name; resolve crashes or incomplete shutdown before retrying.") from None
+            raise GameStackError("Cannot establish a safe server state for this operation. Check gamestack status and doctor with the instance name; resolve crashes or incomplete shutdown before retrying.") from None
+
+    def restore(self, instance: str, backup_id: str, *, expected_state: str, expected_data: bool) -> "RestoreResult":
+        from .restore import run
+        return run(self, instance, backup_id, expected_state=expected_state, expected_data=expected_data)
 
     def backup(self, instance: str) -> tuple[Path, str]:
         from . import backup
         directory, pack = self.inspect(instance)
         with self.lock(directory):
+            from .restore import require_no_transaction
+            require_no_transaction(directory)
             self.inspect(instance)
             self.doctor()
             log.info("Backup phase=preflight instance=%s", instance)
@@ -326,10 +368,13 @@ class Runtime:
             raise GameStackError(f"Could not start {instance} and confirm its health. Check downloads, free memory/disk, game port conflicts, and world folder permissions. Files were retained; the server may still be running. Run gamestack status {instance} and gamestack doctor {instance} before retrying.") from exc
 
     def lifecycle(self, action: str, instance: str) -> str:
-        directory, pack = self.inspect(instance)
+        directory, pack = self.inspect(instance, allow_missing_data=action in ("stop", "status"))
         base = self.compose_command(directory)
         with self.lock(directory):
-            self.inspect(instance)
+            from .restore import require_no_transaction
+            if action in ("start", "restart"):
+                require_no_transaction(directory)
+            self.inspect(instance, allow_missing_data=action in ("stop", "status"))
             self.doctor()
             log.info("Operation=%s instance=%s started", action, instance)
             if action == "status":

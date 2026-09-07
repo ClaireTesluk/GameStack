@@ -54,6 +54,16 @@ class DockerIntegration(unittest.TestCase):
                 for archive in archives:
                     self.assertIn("integrity verified", cli("backup", "verify", instance, archive.stem))
                 self.assertIn("does not recheck integrity", cli("backup", "list", instance))
+                save.write_text("later synthetic world", encoding="utf-8")
+                self.assertIn("health not tested", cli("restore", instance, archives[0].stem, "--yes"))
+                self.assertEqual(save.read_text(), "synthetic persistent world")
+                safety = sorted((directory / "backups").glob("*.tar"))[-1]
+                self.assertIn("health not tested", cli("restore", instance, safety.stem, "--yes"))
+                self.assertEqual(save.read_text(), "later synthetic world")
+                cli("start", instance)
+                self.assertIn("healthy", cli("restore", instance, archives[0].stem, "--yes"))
+                self.assertEqual(save.read_text(), "synthetic persistent world")
+                self.assertIn("healthy", cli("status", instance))
                 cli("restart", instance)
                 first_id = docker(*compose, "ps", "--quiet", "server")
                 self.assertEqual(docker("exec", first_id, "cat", "/data/save.txt"), "synthetic persistent world")

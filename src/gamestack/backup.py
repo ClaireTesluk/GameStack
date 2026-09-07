@@ -211,7 +211,7 @@ def verify(path: Path, instance: str) -> dict:
                 key = member.name
                 parts = PurePosixPath(key).parts
                 if (not parts or key != str(PurePosixPath(key)) or key.startswith("/") or
-                        ".." in parts or "\\" in key or not (member.isdir() or member.isfile()) or member.issparse()):
+                        ".." in parts or "\\" in key or member.size < 0 or not (member.isdir() or member.isfile()) or member.issparse()):
                     raise ValueError("Unsafe member")
                 if key == "manifest.json":
                     if not member.isfile() or member.size > MANIFEST_LIMIT:
@@ -248,7 +248,7 @@ def verify(path: Path, instance: str) -> dict:
             raise ValueError("Invalid metadata")
         if datetime.fromisoformat(manifest["created_utc"]).utcoffset() != timezone.utc.utcoffset(None):
             raise ValueError("Invalid time")
-        if manifest["initial_state"] not in ("running", "exited", "created", "absent"):
+        if manifest["initial_state"] not in ("running", "exited", "created", "absent", "crashed"):
             raise ValueError("Invalid state")
         if not re.fullmatch(r".+@sha256:[a-f0-9]{64}", manifest["image"]):
             raise ValueError("Invalid image")

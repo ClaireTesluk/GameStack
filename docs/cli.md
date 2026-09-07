@@ -1,6 +1,6 @@
 # Using the development CLI
 
-This is the first engine milestone, version `0.1.0.dev1`. No game is supported yet. Manual backup creation, listing, and integrity verification are implemented. Restore, retention, updates, and scheduled maintenance are pending; use synthetic data for development.
+This is the first engine milestone, version `0.1.0.dev1`. No game is supported yet. Manual backup creation, listing, integrity verification, and restore are implemented. Restore acceptance, retention, updates, and scheduled maintenance are pending; use synthetic data for development.
 
 ## Setup
 
@@ -44,6 +44,7 @@ Use `gamestack --root /srv/gamestack ...` to choose a dedicated writable storage
 | Check prerequisites | `gamestack doctor` | Docker access and Compose capability pass | Install/start Docker and grant the operating account access |
 | Create backup | `gamestack backup friends` | Verified archive location and final server state | Check disk space, permissions, and clean shutdown; partial artifacts retained |
 | List backups | `gamestack backup list friends` | Newest-first IDs, UTC dates, and sizes; no integrity recheck | Check instance name, root, and backup folder access |
+| Restore backup | `gamestack restore friends [BACKUP-ID]` | Confirm full data replacement; preserve a safety backup; resume only an initially running server | Check compatibility, space, shutdown, permissions, and any restore marker; follow recovery instructions |
 | Verify backup | `gamestack backup verify friends BACKUP-ID` | Full archive integrity verified without extraction | Keep corrupt/incomplete archives and select another copy |
 | Check instance | `gamestack doctor friends` | Also validates saved configuration and world-folder existence | Restore missing configuration/data; do not bypass safety checks |
 
@@ -150,7 +151,7 @@ Do not modify source data through other tools while capture runs.
 
 Archives are uncompressed, so allow approximately the full data/configuration size
 plus headers, manifest allowance, and at least 64 MiB of free-space reserve. All
-backups are retained. There is no automatic pruning, restore command, scheduling,
+backups are retained. There is no automatic pruning, scheduling,
 custom destination, exclusion list, or compression option in this milestone.
 
 Listing works without Docker, displays IDs, UTC timestamps and sizes newest first,
@@ -180,3 +181,158 @@ Failures return exit status 1, and interrupts return 130:
 A nonzero result can coexist with a valid retained backup. Read the result before
 retrying. Do not manually remove partial files or stale locks while an operation is
 still running. No backup deletion is performed by GameStack.
+
+## Restore backups
+
+```bash
+gamestack restore friends
+gamestack restore friends BACKUP-ID
+gamestack restore friends BACKUP-ID --yes
+```
+
+Restore replaces the **entire** `data/` folder, including world files, player lists,
+plugins, and server settings stored there. Files created after the selected backup
+are absent from the restored folder. Current GameStack instance, GamePack, and
+Compose configuration remain active, including current user settings. Archived
+GameStack configuration is validated but never executed or installed.
+
+Without an ID, an interactive numbered list shows completed backups newest first,
+with UTC dates and sizes. Enter a number, then confirm `[y/N]`; blank selection or
+answering no cancels without changing files. Listing does not verify integrity.
+There is no automatic newest-backup selection. Scripts must supply an ID and
+`--yes`. Use IDs from `gamestack backup list friends`, without `.tar`; paths and
+`latest` are not accepted. Global options such as `--root` precede `restore`.
+
+Before confirmation, GameStack shows the target folder, player-disconnection
+warning, safety-backup behavior, and intended final server state. After confirmation
+it takes the operation lock, rechecks state, verifies the selected archive, and
+stages a complete checked copy privately inside the instance folder. It then stops
+a running server gracefully and creates a verified safety backup of current data.
+Existing but inaccessible, linked, specially owned, or mounted data blocks restore;
+it cannot be skipped. If `data/` is genuinely missing, an explicit warning explains
+that no current world can be backed up. `--yes` accepts that warning.
+
+The stopped service container is removed before switching folders so the next
+start uses the new data mount; no volumes are deleted. Saves must live inside the
+pack's declared data folder, not the container's writable layer. See
+[Docker's stopped-container removal behavior](https://docs.docker.com/reference/cli/docker/compose/rm/).
+The old data folder and safety archive both remain available. A server that was
+running restarts and must pass its health check. Stopped, crashed, and never-started
+servers remain stopped, with `health not tested` in the result. Use `gamestack start
+friends` when ready. Docker must be accessible for every restore.
+
+Success prints the restored ID, safety archive location (or the missing-data
+exception), retained recovery directory, and final state. Safety archives appear in
+`backup list` and can be restored with the same command. A safety archive captured
+from a confirmed stopped crashed server records `initial_state: crashed`; it
+preserves that state, but does not promise those files form a healthy world.
+Older GameStack versions may reject this metadata; use the current restore-capable
+version to verify or restore it. Existing schema-1 backups remain readable.
+
+Restore requires the original configured instance, original operating account and
+ownership, and an identical validated GamePack definition, including its pinned
+image and fixed settings. Different GamePack revisions are rejected even if their
+version labels match. Removed instances, damaged GameStack configuration, other
+hosts, imported archive paths, partial restores, and version rollback are not
+supported. Archive checks detect corruption, not authenticity; keep backup storage
+private. Do not let other processes or users write instance files during restore.
+
+Allow space for the full staged data, a full safety archive, archive overhead, and
+at least 64 MiB reserve. The original data is retained by renaming, without another
+full copy. Archives, old data, and partial staging files are never automatically
+pruned. Retained directories are private; extracted files use ordinary archived
+permissions and modification times under the operating account. Special permission
+bits and directories inaccessible to that account are rejected.
+
+Failures return 1; interruptions return 130. Typical outcomes:
+
+- Invalid backups, incompatible packs, insufficient space, or changed state before
+  shutdown leave current data intact. Correct the cause and retry.
+- Failed or unverified shutdown blocks replacement and automatic restart. Inspect
+  status and doctor before retrying.
+- A safety-backup failure blocks replacement. After a confirmed clean shutdown,
+  GameStack attempts to restart the untouched original server if it was running.
+- Once replacement begins, failures retain all copies and the restore marker.
+  There is no automatic rollback. Follow the recovery procedure below.
+- Failed startup or health verification attempts to stop the restored server.
+  Output says whether stopping was confirmed; if not, it may still be writing.
+- Interruptions do not trigger an automatic restart. Check status; an interrupted
+  startup may already have started the server. Abrupt termination may also retain
+  `.operation.lock`.
+
+## Interrupted restore recovery
+
+An unfinished restore leaves `<root>/<instance>/.restore.json`. It blocks start,
+restart, backup creation, removal, and further restores. Status, stop, backup list,
+and backup verify remain available, including when the active data folder is
+missing. Clearing an operation lock alone does **not** clear this protection.
+
+This is a manual recovery procedure for the original operating account. Never
+execute text from the marker as commands, overwrite an existing directory, merge
+folders, or delete any data copies. If the layout differs from the cases below,
+retain everything and investigate before proceeding.
+
+1. Check that no GameStack operation is still running. Only then clear a stale
+   `.operation.lock` as described above. Run `gamestack stop INSTANCE`, then
+   `gamestack status INSTANCE`, using the original `--root`. Do not move files if
+   stopping cannot be confirmed. Stop external writers as well.
+2. Read `.restore.json`. Confirm its instance and that `work_directory` is a direct,
+   real `.restore-<hex>` child of this instance folder, not a link or another path.
+   Confirm any `safety_backup` is inside this instance's `backups/` folder. The
+   recorded phase is intent written **before** the corresponding operation, so
+   inspect which directories actually exist.
+3. Run `gamestack backup verify INSTANCE BACKUP-ID` for the selected backup and,
+   when recorded, the safety backup. At least the backup you intend to recover
+   must verify successfully. Keep corrupt copies too. These checks do not prove
+   that the server will start successfully.
+4. Reconcile the folders using this table. All names are relative to the validated
+   instance or work directory. Rename only into an absent destination, preserving
+   all other directories and their ownership.
+
+| Marker phase | Expected layouts and recovery |
+| --- | --- |
+| `remove-container` | Folder replacement has not begun. Leave current `data/` in place, or absent if originally missing. The stopped container may already be removed. |
+| `preserve-current` | If current `data/` exists and `previous-data/` does not, leave it. If `data/` is absent and work `previous-data/` exists, rename `previous-data/` back to instance `data/`. If both are absent, proceed only when `had_data` is false. |
+| `install-staged` | If work `data/` exists and instance `data/` is absent, rename work `previous-data/` back to instance `data/` when present; otherwise leave data absent only when `had_data` is false. If work `data/` is absent and instance `data/` exists, the complete staged copy was installed; leave it and retain `previous-data/`. |
+| `start` or `complete` | The restored data was installed. Leave instance `data/` and retained `previous-data/` in place. Confirm the server is stopped before further recovery; a startup may have succeeded even if the command was interrupted. |
+
+5. Once the folders match a case above and the chosen archive verifies, rename
+   `.restore.json` into that work directory as `reconciled-restore.json`, only if
+   that name is absent. Keep this record. Do not clear a marker merely to suppress
+   an error. If data is present, run `gamestack doctor INSTANCE` before starting.
+6. To recover the pre-restore state, run `gamestack restore INSTANCE SAFETY-BACKUP-ID`.
+   To retry the chosen restore, use its original ID instead. Because the server is
+   now stopped, restoration leaves it stopped. Then run `gamestack start INSTANCE`
+   and check the world in-game. If there was no previous data, only the selected
+   backup is available. Keep all safety archives and retained directories.
+
+If interruption occurred before `.restore.json` was created, active data was not
+replaced. Private `.restore-<hex>` staging folders or marker `.partial` files may
+remain. Confirm the server state and retry normally; leave partial files retained.
+
+
+## Command help
+
+Every command supports `--help` and `-h`, including nested commands:
+
+```bash
+gamestack --help
+gamestack install --help
+gamestack pack validate --help
+gamestack backup --help
+gamestack backup list --help
+gamestack backup verify --help
+gamestack restore --help
+```
+
+Help explains arguments, options, examples, expected behavior, and relevant safety
+or failure guidance. It exits successfully without prompting, contacting Docker,
+or reading/writing instance files. No installed instance is needed to read help.
+Use `gamestack COMMAND --help` for `list`, `rm`, `start`, `stop`, `restart`, `status`,
+and `doctor` as well.
+
+Global `--root` and `--debug` options go before the command, for example
+`gamestack --root /srv/gamestack --debug status friends`. Each command's help
+reminds you of this placement. The top-level help shows the default storage path.
+For backup creation, `list` and `verify` remain valid instance names; adding
+`--help` after those words displays their corresponding focused help pages.

@@ -81,6 +81,7 @@ def smoke(command, expected):
             return result.stdout
         assert invoke(["--version"]).strip() == expected
         assert "install" in invoke(["--help"])
+        assert "backup_id" in invoke(["restore", "--help"])
         pack = workspace / "pack.yaml"
         shutil.copyfile(ROOT / "packs/example/pack.yaml", pack)
         invoke(["pack", "validate", str(pack)])
@@ -91,6 +92,8 @@ def smoke(command, expected):
         assert "No completed backups found" in invoke([*common, "backup", "list", "smoke"])
         invoke([*common, "backup", "verify", "smoke", "invalid-id"], success=False)
         assert "smoke: unknown (status unavailable)" in invoke([*common, "list"])
+        invoke([*common, "restore", "smoke", "--yes"], success=False)
+        invoke([*common, "restore", "smoke", "invalid-id", "--yes"], success=False)
         invoke([*common, "rm", "smoke"], success=False)
         assert (storage / "smoke/instance.yaml").exists()
         assert not (storage / "smoke/removed.yaml").exists()

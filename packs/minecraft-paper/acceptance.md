@@ -106,3 +106,32 @@ not cover these new checks. Record fresh host evidence before marking them passe
       source files and record actionable failure output.
 
 Restore, retention, and failed-update recovery remain separate pending release gates.
+
+## Restore acceptance — pending
+
+Manual restore testing **passed (user-confirmed, 2026-09-06)**; see the
+[runbook](acceptance-runbook.md#manual-restore-validation). The scenario-level
+checklist below remains pending evidence; the confirmation did not enumerate
+individual cases or provide host/revision details.
+
+Use only the disposable instance in the acceptance runbook. Record host details,
+runtime revision, pack/image pins, selected and safety backup IDs, command outcomes,
+and final server states. Keep archive contents and configuration private.
+
+- [ ] Build a recognizable marker in-world and record its location; back up.
+- [ ] Change that marker and player state, then restore the earlier backup while
+      running. Confirm healthy restart, reconnect, and verify the earlier state.
+- [ ] Restore the generated safety backup and confirm the later state returns.
+- [ ] Repeat while stopped: exact restore succeeds and stays stopped until start.
+- [ ] Confirm files created after the backup disappear from active data and remain
+      in the safety backup/retained previous-data folder.
+- [ ] Confirm current GameStack configuration remains unchanged.
+- [ ] Exercise a disposable missing-data instance and a confirmed stopped crashed
+      instance; check warnings, snapshot metadata, ownership, and stopped result.
+- [ ] Confirm corrupt/incompatible archives and insufficient space block replacement.
+- [ ] Exercise failed health verification and interrupted replacement using synthetic
+      data; verify retained copies and the documented marker recovery procedure.
+
+The opt-in Paper Docker harness checks restored file contents, safety-backup
+roundtrip, and actual health after restore. It cannot substitute for player-observed
+world recovery. Retention, safe updates, and final release acceptance remain gates.

@@ -140,6 +140,22 @@ class PaperIntegration(unittest.TestCase):
             artifact, state = runtime.backup(instance)
             self.assertEqual(state, 'stopped')
             verify(artifact, instance)
+            marker_file = directory / 'data/restore-acceptance.txt'
+            marker_file.write_text('synthetic later state', encoding='utf-8')
+            restored = runtime.restore(instance, artifact.stem, expected_state='exited', expected_data=True)
+            self.assertEqual(restored.state, 'stopped (health not tested)')
+            self.assertFalse(marker_file.exists())
+            verify(restored.safety_backup, instance)
+            runtime.restore(instance, restored.safety_backup.stem, expected_state='absent', expected_data=True)
+            self.assertEqual(marker_file.read_text(), 'synthetic later state')
+            lifecycle('start')
+            running_restore = runtime.restore(instance, artifact.stem, expected_state='running', expected_data=True)
+            self.assertEqual(running_restore.state, 'healthy')
+            self.assertFalse(marker_file.exists())
+            first = runtime.command(base + ['ps', '--quiet', 'server']).strip()
+            report['restore'] = {'backup_id': artifact.stem, 'health': running_restore.state,
+                                 'stopped_roundtrip': 'passed', 'safety_roundtrip': 'passed',
+                                 'in_game_world_check': 'pending manual acceptance'}
             lifecycle('restart')
             self.assertEqual(artifact_hashes(), hashes)
             stop_cleanly(first)

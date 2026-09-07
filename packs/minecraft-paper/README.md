@@ -1,7 +1,7 @@
 # GameStack — private server for Minecraft Java (Paper)
 
 **Experimental playable milestone.** Manual backup creation and integrity checks
-are implemented; restore and safe updates remain pending. Use a disposable new world for evaluation. This pack is not yet a
+and safe restore are implemented; restore acceptance and safe updates remain pending. Use a disposable new world for evaluation. This pack is not yet a
 supported or sellable release. The playable milestone passed all manual acceptance
 checks, confirmed by the user on 2026-09-06; see [the acceptance record](acceptance.md).
 
@@ -106,7 +106,8 @@ gamestack rm minecraft-paper
 This asks before stopping/removing the container and retains all instance files.
 The retired name cannot be reused. Never delete the instance to repair a startup
 failure. Do not hand-edit generated Compose or instance metadata. No import,
-restore, update, downgrade, or automatic backup procedure is offered yet.
+update, downgrade, or automatic backup procedure is offered yet. Manual restore
+is available as described below.
 
 The image digest, Minecraft version, and Paper build are fixed. Restarting does not
 select a newer build. Avoid manually replacing these values: world-format updates
@@ -168,3 +169,26 @@ No copies are pruned. See the [backup guide](../../docs/cli.md#manual-backups) f
 failures, retained partial artifacts, and restart guidance. Restore and real-world
 recovery acceptance remain pending; integrity verification does not make this pack
 supported.
+
+## Experimental restore
+
+Use `gamestack restore minecraft-paper` to choose a local backup, or
+`gamestack restore minecraft-paper BACKUP-ID` to select one explicitly. Substitute
+your instance name. Confirm the replacement and temporary player disconnection.
+The entire data folder is restored, including worlds, player lists, plugins, and
+server files. Current GameStack settings remain active; the saved GamePack must
+match exactly. Version rollback and recovery onto another host are not included.
+
+GameStack verifies and stages the backup, stops a running server, makes a verified
+safety backup, and preserves the old data folder before replacement. Initially
+running servers restart and must pass health verification; stopped or crashed
+servers stay stopped. Missing data can be recovered with an explicit warning that
+there is no current world to snapshot. Inaccessible data cannot be skipped.
+
+The result prints the safety backup ID/location and retained recovery directory.
+Safety archives appear in `gamestack backup list minecraft-paper` and can be
+restored with the same command. Allow space for staged data plus a full safety
+archive; no recovery copies are pruned. If restore is interrupted or health fails,
+read the [restore recovery guide](../../docs/cli.md#interrupted-restore-recovery)
+before starting again. See the [restore acceptance checklist](acceptance.md#restore-acceptance--pending).
+Implementation and automated tests do not establish successful in-game recovery.

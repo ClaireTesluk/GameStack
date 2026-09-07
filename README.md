@@ -26,7 +26,7 @@ You should not need to understand Docker Compose, SteamCMD, bind mounts, or Linu
 
 GameStack is currently in **early development: the first v0.1 engine milestone is implemented**. It is not a finished release and no GamePack is supported yet.
 
-The CLI can validate GamePack YAML, prompt for settings, prepare private instance storage, and list configured instances with state and health, and run start/stop/restart/status/doctor commands, plus `rm` to remove an instance while retaining its data. An experimental [Minecraft Paper pack](packs/minecraft-paper/README.md) now supplies the first real-game configuration. Its playable milestone passed user-confirmed manual acceptance on 2026-09-06. Manual backup creation, listing, and integrity verification are implemented. Restore, retention, safe updates, and final release acceptance remain pending.
+The CLI can validate GamePack YAML, prompt for settings, prepare private instance storage, and list configured instances with state and health, and run start/stop/restart/status/doctor commands, plus `rm` to remove an instance while retaining its data. An experimental [Minecraft Paper pack](packs/minecraft-paper/README.md) now supplies the first real-game configuration. Its playable milestone passed user-confirmed manual acceptance on 2026-09-06. Manual backup creation, listing, integrity verification, and [safe restore](docs/cli.md#restore-backups) are implemented. Restore acceptance, retention, safe updates, and final release acceptance remain pending.
 
 - [Try the development CLI](docs/cli.md)
 - [Write a GamePack](docs/gamepacks.md)
