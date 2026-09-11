@@ -11,10 +11,9 @@ import stat
 import tarfile
 import uuid
 
-import yaml
-
 from . import backup
-from .pack import GameStackError, UniqueLoader, read_yaml, validate
+from .filesystem import sync_directory
+from .pack import CONFIG_LIMIT, GameStackError, parse_yaml, read_yaml, validate
 from .runtime import Runtime, validate_configuration
 
 log = logging.getLogger(__name__)
@@ -85,21 +84,10 @@ def check_space(directory: Path, manifest: dict, present: bool) -> None:
         entry["size"] + 4096 for entry in manifest["entries"] if entry["path"] == "data" or entry["path"].startswith("data/"))
     if present:
         entries = backup.preflight(directory)
-        required += backup.MANIFEST_LIMIT + 10240 + sum(
-            ((info.st_size + 511) // 512 * 512 if stat.S_ISREG(info.st_mode) else 0)
-            + 4096 + len(name.encode("utf-8")) * 2 for name, _, info in entries)
+        required += backup.archive_size(entries)
     free = shutil.disk_usage(directory).free
     if free < required:
         raise GameStackError(f"Could not restore: {free} bytes free; at least {required} bytes required for staged data and a safety backup. Free disk space and retry.")
-
-
-def sync_directory(directory: Path) -> None:
-    if os.name == "posix":
-        descriptor = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            os.fsync(descriptor)
-        finally:
-            os.close(descriptor)
 
 
 def write_marker(directory: Path, record: dict) -> None:
@@ -151,19 +139,20 @@ def stage(directory: Path, instance: str, path: Path, pack: dict, present: bool)
                     raise GameStackError("Backup changed or contains unsafe members. Staged files were retained; select another backup.")
                 seen.add(member.name)
                 if member.name.startswith("configuration/"):
-                    if member.size > 256_000:
+                    if member.size > CONFIG_LIMIT:
                         raise GameStackError("Archived configuration is too large. Select another backup.")
-                    payload = archive.extractfile(member).read()
+                    payload = archive.extractfile(member).read(CONFIG_LIMIT + 1)
                     if hashlib.sha256(payload).hexdigest() != entry["sha256"]:
                         raise GameStackError("Archived configuration checksum differs. Select another backup.")
                     try:
-                        config[member.name.split("/")[1]] = yaml.load(payload.decode("utf-8"), Loader=UniqueLoader)
-                    except (yaml.YAMLError, UnicodeError, RecursionError, GameStackError):
+                        config[member.name.split("/")[1]] = parse_yaml(payload)
+                    except GameStackError:
                         raise GameStackError("Archived configuration is invalid. Select another backup.") from None
                     continue
-                target = work
-                for component in member.name.split("/"):
-                    target = backup.safe_child(target, component)
+                # Member names matched the verified manifest above. Check the whole
+                # ancestor chain once rather than revisiting every prefix.
+                target = work / member.name
+                target = backup.safe_child(target.parent, target.name)
                 if member.isdir():
                     target.mkdir(mode=0o700)
                     directories.append((target, entry))

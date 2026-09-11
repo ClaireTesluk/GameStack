@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 
 import yaml
 
+from .filesystem import safe_child as child
 from .pack import GameStackError, fields, load_pack, name, read_yaml, require, validate_values, bind_address
 
 if TYPE_CHECKING:
@@ -31,13 +32,6 @@ def checked_root(path: Path) -> Path:
     path = path.resolve()
     if path in (Path.home().resolve(), Path("/srv"), Path("/opt"), Path("/home")) or len(path.parts) < 3:
         raise GameStackError("Storage needs a dedicated subdirectory, such as /srv/gamestack.")
-    return path
-
-
-def child(parent: Path, component: str) -> Path:
-    path = parent / component
-    if path.is_symlink() or path.resolve().parent != parent.resolve():
-        raise GameStackError("An instance path is unsafe. Check for symbolic links before retrying.")
     return path
 
 
@@ -96,6 +90,12 @@ def validate_configuration(metadata: dict, pack: dict, document: dict, directory
         require(document == compose(pack, values, directory, deployment), "Generated server configuration has changed.")
     except (KeyError, AttributeError, TypeError, RecursionError) as exc:
         raise GameStackError("Saved server configuration is invalid. Recover the original configuration before retrying.") from exc
+
+
+def status_rows(raw: str) -> list:
+    """Decode Compose array or JSON-lines output; callers apply status policy."""
+    return json.loads(raw) if raw.strip().startswith("[") else [
+        json.loads(line) for line in raw.splitlines() if line.strip()]
 
 
 class Runtime:
@@ -241,7 +241,7 @@ class Runtime:
         with self.lock(directory):
             from .restore import require_no_transaction
             require_no_transaction(directory)
-            self.inspect(instance)
+            directory, pack = self.inspect(instance)
             self.doctor()
             base = self.compose_command(directory)
             log.warning("Removing instance=%s container; retaining files at %s", instance, directory)
@@ -261,8 +261,7 @@ class Runtime:
             directory = self.directory(instance)
             raw = self.command(self.compose_command(directory) +
                                ["ps", "--all", "--format", "json", "server"], timeout=5)
-            rows = json.loads(raw) if raw.strip().startswith("[") else [
-                json.loads(line) for line in raw.splitlines() if line.strip()]
+            rows = status_rows(raw)
             if not rows:
                 return "stopped (not created)"
             if len(rows) != 1 or not isinstance(rows[0], dict):
@@ -327,7 +326,7 @@ class Runtime:
         with self.lock(directory):
             from .restore import require_no_transaction
             require_no_transaction(directory)
-            self.inspect(instance)
+            directory, pack = self.inspect(instance)
             self.doctor()
             log.info("Backup phase=preflight instance=%s", instance)
             initial = self.backup_state(directory)
@@ -369,19 +368,19 @@ class Runtime:
 
     def lifecycle(self, action: str, instance: str) -> str:
         directory, pack = self.inspect(instance, allow_missing_data=action in ("stop", "status"))
-        base = self.compose_command(directory)
         with self.lock(directory):
             from .restore import require_no_transaction
             if action in ("start", "restart"):
                 require_no_transaction(directory)
-            self.inspect(instance, allow_missing_data=action in ("stop", "status"))
+            directory, pack = self.inspect(instance, allow_missing_data=action in ("stop", "status"))
+            base = self.compose_command(directory)
             self.doctor()
             log.info("Operation=%s instance=%s started", action, instance)
             if action == "status":
                 # Only query fixed state fields; never return raw container output or labels.
                 raw = self.command(base + ["ps", "--all", "--format", "json"])
                 try:
-                    rows = json.loads(raw) if raw.strip().startswith("[") else [json.loads(line) for line in raw.splitlines() if line.strip()]
+                    rows = status_rows(raw)
                     states = []
                     for row in rows:
                         state, health = row.get("State"), row.get("Health")

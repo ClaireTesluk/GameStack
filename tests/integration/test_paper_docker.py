@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import platform
+import re
 import shutil
 import time
 from datetime import datetime, timezone
@@ -27,9 +28,11 @@ ENABLED = (os.environ.get('GAMESTACK_PAPER_TEST') == '1'
 def shutdown_markers(logs):
     """Extract fixed save markers without retaining player chat or private logs."""
     markers = ('Stopping server', 'Saving players', 'Saving worlds', 'All dimensions are saved')
-    # Match the server logger, not a player's chat containing one of these phrases.
-    lines = [line.split('[Server thread/INFO]: ', 1)[1]
-             for line in logs.splitlines() if '[Server thread/INFO]: ' in line]
+    # Paper's console and file layouts differ. Require a logger prefix and an
+    # exact server message below; player chat cannot supply save evidence.
+    lines = [match.group(1) for line in logs.splitlines()
+             if (match := re.fullmatch(
+                 r'\[\d{2}:\d{2}:\d{2}(?: INFO\]|\] \[Server thread/INFO\]): (.*)', line))]
     return [marker for marker in markers
             if any(line == marker or (marker == 'All dimensions are saved' and
                    line == 'ThreadedAnvilChunkStorage: All dimensions are saved')

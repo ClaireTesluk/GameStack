@@ -178,6 +178,14 @@ Failures return exit status 1, and interrupts return 130:
   Check status before acting. Abrupt termination may leave the existing operation
   lock; follow the interrupted-operation instructions above.
 
+If GameStack reports that backup publication or directory changes could not be
+synced to disk, retain the `.tar` and any `.partial` copy. The archive passed
+integrity verification, but durable completion was not confirmed. Check disk
+health, free space, and permissions; use `gamestack backup list friends` and
+`gamestack backup verify friends BACKUP-ID` to inspect the retained archive.
+After resolving the storage problem, create a fresh backup. Verification alone
+does not establish that a failed directory sync has been repaired.
+
 A nonzero result can coexist with a valid retained backup. Read the result before
 retrying. Do not manually remove partial files or stale locks while an operation is
 still running. No backup deletion is performed by GameStack.

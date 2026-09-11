@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import stat
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -41,6 +42,52 @@ class BackupTests(unittest.TestCase):
                 patch.object(self.runtime, 'command') as command, patch.object(self.runtime, 'start_server', **kwargs) as start:
             result = self.runtime.backup('friends')
             return result, command, start
+
+    def test_publication_sync_failures_preserve_verified_copies(self):
+        for fail_at in (1, 2, 3):
+            with self.subTest(fail_at=fail_at):
+                calls = []
+                def sync(directory):
+                    calls.append(directory)
+                    if len(calls) == fail_at:
+                        raise OSError('synthetic disk failure')
+                previous = {p.name for p in backup.folder(self.directory).glob('*')}
+                with patch('gamestack.backup.sync_directory', side_effect=sync):
+                    with self.assertRaisesRegex(GameStackError, 'synced to disk'):
+                        self.create()
+                created = [p for p in backup.folder(self.directory).iterdir() if p.name not in previous]
+                self.assertEqual(len(created), 2 if fail_at < 3 else 1)
+                for path in created:
+                    backup.verify(path, 'friends')
+                self.assertEqual(self.snapshot(), self.before)
+
+    def test_archive_space_estimate_boundary(self):
+        required = backup.RESERVE + backup.archive_size(backup.inventory(self.directory))
+        for free in (required - 1, required):
+            with patch('gamestack.backup.shutil.disk_usage') as usage:
+                usage.return_value.free = free
+                if free < required:
+                    with self.assertRaisesRegex(GameStackError, 'bytes required'):
+                        backup.preflight(self.directory)
+                else:
+                    backup.preflight(self.directory)
+
+    @unittest.skipUnless(os.name == 'posix', 'Deep paths require host long-path support')
+    def test_inventory_deep_tree_does_not_use_python_recursion(self):
+        path = self.directory / 'data'
+        for _ in range(100):
+            path /= 'd'
+            path.mkdir()
+        (path / 'save').write_bytes(b'deep world')
+        limit = sys.getrecursionlimit()
+        try:
+            sys.setrecursionlimit(80)
+            entries = backup.inventory(self.directory)
+        finally:
+            sys.setrecursionlimit(limit)
+        names = [entry[0] for entry in entries]
+        self.assertEqual(names, sorted(names))
+        self.assertIn('data/' + 'd/' * 100 + 'save', names)
 
     def test_archive_roundtrip_contents_and_private_permissions(self):
         path = self.create()

@@ -15,6 +15,7 @@ import tarfile
 import uuid
 
 from . import __version__
+from .filesystem import safe_child, sync_directory
 from .pack import GameStackError
 
 log = logging.getLogger(__name__)
@@ -22,13 +23,6 @@ ID = re.compile(r"[0-9]{8}T[0-9]{12}Z-[a-f0-9]{32}")
 MANIFEST_LIMIT = 16 * 1024 * 1024
 RESERVE = 64 * 1024 * 1024
 CONFIG = ("instance.yaml", "pack.yaml", "compose.yaml")
-
-
-def safe_child(parent: Path, component: str) -> Path:
-    path = parent / component
-    if path.is_symlink() or path.resolve().parent != parent.resolve():
-        raise GameStackError("Backup path is unsafe. Check managed folders for symbolic links.")
-    return path
 
 
 def folder(directory: Path) -> Path:
@@ -81,21 +75,28 @@ def signature(info: os.stat_result) -> tuple:
 
 def inventory(directory: Path) -> list[tuple[str, Path, os.stat_result]]:
     entries = []
-    def visit(path: Path, archive_name: str):
+    pending = [("data", safe_child(directory, "data"))]
+    for filename in CONFIG:
+        path = safe_child(directory, filename)
+        if not stat.S_ISREG(path.lstat().st_mode):
+            raise GameStackError("Backup configuration must contain regular files. Run gamestack doctor with the instance name.")
+        pending.append(("configuration/" + filename, path))
+    while pending:
+        archive_name, path = pending.pop()
         info = path.lstat()
         if not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)):
             raise GameStackError("Backup source contains a link or special file. Use regular files and directories inside the data folder.")
         entries.append((archive_name, path, info))
         if stat.S_ISDIR(info.st_mode):
-            for entry in sorted(path.iterdir(), key=lambda item: item.name):
-                visit(entry, archive_name + "/" + entry.name)
-    visit(safe_child(directory, "data"), "data")
-    for filename in CONFIG:
-        path = safe_child(directory, filename)
-        if not stat.S_ISREG(path.lstat().st_mode):
-            raise GameStackError("Backup configuration must contain regular files. Run gamestack doctor with the instance name.")
-        visit(path, "configuration/" + filename)
+            pending.extend((archive_name + "/" + entry.name, entry) for entry in path.iterdir())
     return sorted(entries)
+
+
+def archive_size(entries: list) -> int:
+    """Conservative archive estimate including bounded manifest and PAX overhead."""
+    return MANIFEST_LIMIT + 10240 + sum(
+        ((info.st_size + 511) // 512 * 512 if stat.S_ISREG(info.st_mode) else 0)
+        + 4096 + len(archive_name.encode("utf-8")) * 2 for archive_name, _, info in entries)
 
 
 def preflight(directory: Path) -> list:
@@ -106,11 +107,7 @@ def preflight(directory: Path) -> list:
             raise GameStackError("Backup location is not a directory. Preserve the existing file and correct the folder layout before retrying.")
         if os.name == "posix" and destination.stat().st_mode & 0o077:
             raise GameStackError("Backup folder is not private. Restrict its permissions to the operating account before retrying.")
-    # Reserve room for bounded manifest, PAX headers, padding, and filesystem headroom.
-    required = RESERVE + MANIFEST_LIMIT + 10240
-    for archive_name, _, info in entries:
-        required += ((info.st_size + 511) // 512 * 512 if stat.S_ISREG(info.st_mode) else 0)
-        required += 4096 + len(archive_name.encode("utf-8")) * 2
+    required = RESERVE + archive_size(entries)
     free = shutil.disk_usage(destination if destination.exists() else directory).free
     if free < required:
         raise GameStackError(f"Could not create a backup: {free} bytes free; at least {required} bytes required. Free disk space and retry gamestack backup.")
@@ -181,9 +178,19 @@ def create(directory: Path, instance: str, pack: dict, initial_state: str) -> Pa
     # Atomic no-clobber publication on the same filesystem. Never replace another copy.
     os.link(partial, final)
     try:
+        sync_directory(destination)
+        # Persist the backups folder itself when this is its first archive.
+        sync_directory(directory)
+    except OSError:
+        raise GameStackError("Backup publication could not be synced to disk. Archive copies were retained, but durability is unconfirmed. Check disk health and permissions, run backup verify, and retry backup after resolving the problem.") from None
+    try:
         partial.unlink()
     except OSError:
         log.warning("Verified backup published; its partial artifact was also retained. Inspect the backup folder.")
+    try:
+        sync_directory(destination)
+    except OSError:
+        raise GameStackError("Backup directory changes could not be synced to disk. The verified archive was retained, but completion is unconfirmed. Check disk health and permissions, run backup verify, and retry backup after resolving the problem.") from None
     log.info("Backup phase=completed instance=%s", instance)
     return final
 

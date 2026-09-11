@@ -74,6 +74,19 @@ Artifact smoke workspaces retry Windows permission failures after 0.5, 1, 2, and
 
 ## Local verification and rebuilding
 
+Use a Python 3.11+ virtual environment and install the package before running
+checks. `PYTHONPATH=src` alone is insufficient: artifact smoke tests intentionally
+clear it and run outside the checkout. For development tests only:
+
+```bash
+python -m venv .venv
+# Activate .venv using your shell's activation command.
+python -m pip install -e . packaging
+python -m unittest discover -s tests -v
+```
+
+For release artifacts, install the pinned build tools and run:
+
 ```bash
 python -m pip install -r scripts/requirements-ci.txt
 python -m pip install --no-build-isolation -e .
@@ -96,3 +109,5 @@ GAMESTACK_DOCKER_TEST=1 python -m unittest discover -s tests/integration -v
 Set `GAMESTACK_EXECUTABLE` to an absolute bundled executable path to exercise it instead. The test pulls a pinned public nginx image, creates a uniquely named container and synthetic temporary data, and removes only its test resources. It never touches existing game instances. Docker socket access is required; a test that cannot reach Docker fails rather than silently passing.
 
 Use `actionlint .github/workflows/tests.yml` to validate workflow syntax. Local tests do not substitute for the first successful full GitHub run; Windows/macOS runners and publishing are only verified when exercised there.
+
+For opt-in filesystem performance measurements, see [the benchmark procedure and results](performance.md).

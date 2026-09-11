@@ -168,6 +168,23 @@ class RestoreTests(unittest.TestCase):
         cmd.assert_not_called()
         self.assert_current()
 
+    def test_restore_space_includes_staging_and_shared_archive_estimate(self):
+        manifest = backup.verify(self.archive, 'friends')
+        staged = sum(entry['size'] + 4096 for entry in manifest['entries']
+                     if entry['path'] == 'data' or entry['path'].startswith('data/'))
+        for present in (False, True):
+            required = backup.RESERVE + staged
+            if present:
+                required += backup.archive_size(backup.inventory(self.directory))
+            for free in (required - 1, required):
+                with self.subTest(present=present, free=free), patch.object(backup.shutil, 'disk_usage') as usage:
+                    usage.return_value.free = free
+                    if free < required:
+                        with self.assertRaisesRegex(GameStackError, 'bytes required'):
+                            restore.check_space(self.directory, manifest, present)
+                    else:
+                        restore.check_space(self.directory, manifest, present)
+
     def test_safety_failure_resumes_untouched_original(self):
         with self.server('running') as (_, _, start), patch.object(backup, 'create', side_effect=OSError('secret-test')), \
                 self.assertRaisesRegex(GameStackError, 'Original server restarted and healthy') as caught:
@@ -350,6 +367,23 @@ class RestoreTests(unittest.TestCase):
         with self.server('running') as (_, cmd, _), self.assertRaisesRegex(GameStackError, 'special permission'):
             self.runtime.restore('friends', archive.stem, expected_state='running', expected_data=True)
         cmd.assert_not_called()
+        self.assert_current()
+
+    @unittest.skipUnless(os.name == 'posix', 'POSIX symlink substitution')
+    def test_staging_rejects_replaced_parent_directory(self):
+        outside = self.directory.parent / 'outside'
+        outside.mkdir()
+        mkdir = Path.mkdir
+        def substitute(path, *args, **kwargs):
+            mkdir(path, *args, **kwargs)
+            if path.name == 'nested ü' and any(p.name.startswith('.restore-') for p in path.parents):
+                path.rmdir()
+                path.symlink_to(outside, target_is_directory=True)
+        with self.server('running') as (_, command, _), patch.object(Path, 'mkdir', autospec=True, side_effect=substitute):
+            with self.assertRaisesRegex(GameStackError, 'unsafe'):
+                self.run_restore('running')
+        command.assert_not_called()
+        self.assertEqual(list(outside.iterdir()), [])
         self.assert_current()
 
     def test_staging_write_failure_preserves_live_world(self):
